@@ -1,0 +1,31 @@
+apiVersion: odoo.cloud.alterway.fr/v1alpha1
+kind: Odoo
+metadata:
+  name: odoo-sample-full
+spec:
+  size: 1
+  version: "19" # Or "18.0", etc.
+  ingress:
+    enabled: true
+    host: odoo-full.example.com
+    tls: true
+    annotations:
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+
+  service:
+    type: ClusterIP
+  
+  logs:
+    volumeEnabled: true
+
+  storage:
+    data:
+      size: "8Gi"
+    customAddons:
+      size: "2Gi"
+    enterpriseAddons:
+      size: "3Gi"
+  
+  options:
+    workers: "4"
+    log_level: "info"

@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- odoo_v1alpha1_odoo.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples
