@@ -35,9 +35,9 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	odoov1alpha1 "odoo.alterway.com/operator/api/v1alpha1"
-	"odoo.alterway.com/operator/internal/controller"
-	// +kubebuilder:scaffold:imports
+	odoov1alpha1 "cloud.alterway.fr/operator/api/v1alpha1"
+	"cloud.alterway.fr/operator/internal/controller"
+	//+kubebuilder:scaffold:imports
 )
 
 var (
@@ -160,7 +160,7 @@ func main() {
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "3ff32c2f.odoo.alterway.com",
+			LeaderElectionID:       "3ff32c2f.cloud.alterway.fr",
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly

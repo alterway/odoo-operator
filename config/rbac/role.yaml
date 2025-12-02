@@ -44,19 +44,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - networking.k8s.io
-  resources:
-  - ingresses
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - odoo.cloud.alterway.fr
+  - cloud.alterway.fr
   resources:
   - odoos
   verbs:
@@ -68,16 +56,28 @@ rules:
   - update
   - watch
 - apiGroups:
-  - odoo.cloud.alterway.fr
+  - cloud.alterway.fr
   resources:
   - odoos/finalizers
   verbs:
   - update
 - apiGroups:
-  - odoo.cloud.alterway.fr
+  - cloud.alterway.fr
   resources:
   - odoos/status
   verbs:
   - get
   - patch
   - update
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch

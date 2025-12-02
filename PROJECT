@@ -3,19 +3,19 @@
 # and allow the plugins properly work.
 # More info: https://book.kubebuilder.io/reference/project-config.html
 cliVersion: 4.10.1
-domain: odoo.alterway.com
+domain: cloud.alterway.fr
 layout:
 - go.kubebuilder.io/v4
 projectName: operator
-repo: odoo.alterway.com/operator
+repo: cloud.alterway.fr/operator
 resources:
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: odoo.alterway.com
+  domain: cloud.alterway.fr
   group: odoo
   kind: Odoo
-  path: odoo.alterway.com/operator/api/v1alpha1
+  path: cloud.alterway.fr/operator/api/v1alpha1
   version: v1alpha1
 version: "3"

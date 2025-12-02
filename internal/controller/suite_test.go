@@ -32,7 +32,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	odoov1alpha1 "odoo.alterway.com/operator/api/v1alpha1"
+	odoov1alpha1 "cloud.alterway.fr/operator/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 

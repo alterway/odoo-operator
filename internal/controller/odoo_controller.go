@@ -36,7 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	odoov1alpha1 "odoo.alterway.com/operator/api/v1alpha1"
+	odoov1alpha1 "cloud.alterway.fr/operator/api/v1alpha1"
 )
 
 // OdooReconciler reconciles a Odoo object
@@ -45,9 +45,9 @@ type OdooReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=odoo.cloud.alterway.fr,resources=odoos,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=odoo.cloud.alterway.fr,resources=odoos/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=odoo.cloud.alterway.fr,resources=odoos/finalizers,verbs=update
+// +kubebuilder:rbac:groups=cloud.alterway.fr,resources=odoos,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=cloud.alterway.fr,resources=odoos/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=cloud.alterway.fr,resources=odoos/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=services;persistentvolumeclaims;configmaps;secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete

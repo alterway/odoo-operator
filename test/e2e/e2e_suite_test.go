@@ -28,7 +28,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"odoo.alterway.com/operator/test/utils"
+	"cloud.alterway.fr/operator/test/utils"
 )
 
 var (

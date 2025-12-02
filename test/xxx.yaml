@@ -1,4 +1,4 @@
-apiVersion: odoo.cloud.alterway.fr/v1alpha1
+apiVersion: cloud.alterway.fr/v1alpha1
 kind: Odoo
 metadata:
   name: odoo-sample
