@@ -165,17 +165,16 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 	}
 
-	// Create other required PVCs
-	pvcs := []string{"data", "custom-addons", "enterprise-addons"}
-	for _, pvcName := range pvcs {
+	// Create the PVCs if they don't exist
+	pvcNames := []string{"data", "addons"}
+	for _, pvcName := range pvcNames {
 		pvc := &corev1.PersistentVolumeClaim{}
 		err = r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-" + pvcName + "-pvc", Namespace: odoo.Namespace}, pvc)
 		if err != nil && errors.IsNotFound(err) {
-			dep := r.pvcForOdoo(odoo, pvcName)
-			log.Info("Creating a new PVC", "PVC.Namespace", dep.Namespace, "PVC.Name", dep.Name)
-			err = r.Create(ctx, dep)
-			if err != nil {
-				log.Error(err, "Failed to create new PVC", "PVC.Namespace", dep.Namespace, "PVC.Name", dep.Name)
+			pvc := r.pvcForOdoo(odoo, pvcName)
+			log.Info("Creating a new PVC", "PVC.Namespace", pvc.Namespace, "PVC.Name", pvc.Name)
+			if err := r.Create(ctx, pvc); err != nil {
+				log.Error(err, "Failed to create new PVC", "PVC.Namespace", pvc.Namespace, "PVC.Name", pvc.Name)
 				return ctrl.Result{}, err
 			}
 			return ctrl.Result{Requeue: true}, nil
@@ -570,15 +569,15 @@ func (r *OdooReconciler) statefulSetForOdoo(odoo *odoov1alpha1.Odoo, dbHost, sec
 						VolumeMounts: []corev1.VolumeMount{
 							{Name: "odoo-data", MountPath: "/var/lib/odoo"},
 							{Name: "odoo-config", MountPath: "/etc/odoo/odoo.conf", SubPath: "odoo.conf"},
-							{Name: "enterprise-addons", MountPath: "/mnt/extra-addons/enterprise-addons"},
-							{Name: "custom-addons", MountPath: "/mnt/extra-addons/custom-addons"},
+							{Name: "enterprise-addons", MountPath: "/mnt/extra-addons/enterprise-addons", SubPath: "enterprise-addons"},
+							{Name: "custom-addons", MountPath: "/mnt/extra-addons/custom-addons", SubPath: "custom-addons"},
 						},
 					}},
 					Volumes: []corev1.Volume{
 						{Name: "odoo-config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: odoo.Name + "-config"}}}},
 						{Name: "odoo-data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: odoo.Name + "-data-pvc"}}},
-						{Name: "custom-addons", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: odoo.Name + "-custom-addons-pvc"}}},
-						{Name: "enterprise-addons", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: odoo.Name + "-enterprise-addons-pvc"}}},
+						{Name: "custom-addons", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: odoo.Name + "-addons-pvc"}}},
+						{Name: "enterprise-addons", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: odoo.Name + "-addons-pvc"}}},
 					},
 				},
 			},
@@ -602,8 +601,6 @@ func (r *OdooReconciler) statefulSetForOdoo(odoo *odoov1alpha1.Odoo, dbHost, sec
 			Name:      "odoo-logs",
 			MountPath: "/var/log/odoo",
 		}
-		// Add to odoo-init container
-		dep.Spec.Template.Spec.InitContainers[1].VolumeMounts = append(dep.Spec.Template.Spec.InitContainers[1].VolumeMounts, logVolumeMount)
 		// Add to odoo container
 		dep.Spec.Template.Spec.Containers[0].VolumeMounts = append(dep.Spec.Template.Spec.Containers[0].VolumeMounts, logVolumeMount)
 	}
@@ -667,16 +664,16 @@ func (r *OdooReconciler) jobForOdooInit(odoo *odoov1alpha1.Odoo, dbHost, secretN
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "odoo-data", MountPath: "/var/lib/odoo"},
 								{Name: "odoo-config", MountPath: "/etc/odoo/odoo.conf", SubPath: "odoo.conf"},
-								{Name: "enterprise-addons", MountPath: "/mnt/extra-addons/enterprise-addons"},
-								{Name: "custom-addons", MountPath: "/mnt/extra-addons/custom-addons"},
+								{Name: "enterprise-addons", MountPath: "/mnt/extra-addons/enterprise-addons", SubPath: "enterprise-addons"},
+								{Name: "custom-addons", MountPath: "/mnt/extra-addons/custom-addons", SubPath: "custom-addons"},
 							},
 						},
 					},
 					Volumes: []corev1.Volume{
 						{Name: "odoo-config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: odoo.Name + "-config"}}}},
 						{Name: "odoo-data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: odoo.Name + "-data-pvc"}}},
-						{Name: "custom-addons", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: odoo.Name + "-custom-addons-pvc"}}},
-						{Name: "enterprise-addons", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: odoo.Name + "-enterprise-addons-pvc"}}},
+						{Name: "custom-addons", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: odoo.Name + "-addons-pvc"}}},
+						{Name: "enterprise-addons", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: odoo.Name + "-addons-pvc"}}},
 					},
 				},
 			},
@@ -786,12 +783,24 @@ func (r *OdooReconciler) pvcForOdoo(odoo *odoov1alpha1.Odoo, name string) *corev
 	case "logs":
 		storageSpec = odoo.Spec.Storage.Logs
 		defaultSize = "2Gi"
-	case "custom-addons":
-		storageSpec = odoo.Spec.Storage.CustomAddons
-		defaultSize = "2Gi"
-	case "enterprise-addons":
-		storageSpec = odoo.Spec.Storage.EnterpriseAddons
-		defaultSize = "3Gi"
+	case "addons":
+		// Sum the sizes of custom and enterprise addons
+		customSize := odoo.Spec.Storage.CustomAddons.Size
+		if customSize == "" {
+			customSize = "2Gi"
+		}
+		enterpriseSize := odoo.Spec.Storage.EnterpriseAddons.Size
+		if enterpriseSize == "" {
+			enterpriseSize = "3Gi"
+		}
+
+		cQ := resource.MustParse(customSize)
+		eQ := resource.MustParse(enterpriseSize)
+		cQ.Add(eQ)
+
+		storageSpec = odoo.Spec.Storage.CustomAddons // Use CustomAddons as base for other props
+		storageSpec.Size = cQ.String()
+		defaultSize = "5Gi" // Fallback if something goes wrong, though we calculated it
 	}
 
 	// Apply defaults if not specified in the CR

@@ -130,7 +130,7 @@ var _ = Describe("Odoo Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			// Check that the PVCs were created
-			pvcNames := []string{"data", "custom-addons", "enterprise-addons"}
+			pvcNames := []string{"data", "addons"}
 			for _, pvcName := range pvcNames {
 				pvc := &corev1.PersistentVolumeClaim{}
 				pvcKey := types.NamespacedName{Name: resourceName + "-" + pvcName + "-pvc", Namespace: "default"}
@@ -147,7 +147,7 @@ var _ = Describe("Odoo Controller", func() {
 			}, "20s", "2s").Should(Succeed(), "should create the db-init job")
 
 			// Check that the PVCs are mounted in the Job
-			expectedVolumeMounts := []string{"odoo-data", "odoo-config", "enterprise-addons", "custom-addons"}
+			expectedVolumeMounts := []string{"odoo-data", "odoo-config", "enterprise-addons", "custom-addons", "odoo-logs"}
 			actualVolumeMounts := []string{}
 			for _, vm := range dbInitJob.Spec.Template.Spec.Containers[0].VolumeMounts {
 				actualVolumeMounts = append(actualVolumeMounts, vm.Name)

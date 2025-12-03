@@ -1,0 +1,57 @@
+=== RUN   TestControllers
+Running Suite: Controller Suite - /Users/hleclerc/dev/projects/clients/alterway/odoo-operator/operator/internal/controller
+==========================================================================================================================
+Random Seed: [1m1764754505[0m
+
+Will run [1m1[0m of [1m1[0m specs
+[38;5;243m------------------------------[0m
+[38;5;13m• [PANICKED] [2.100 seconds][0m
+[0mOdoo Controller [38;5;243mWhen reconciling a resource [38;5;13m[1m[It] should successfully reconcile the resource[0m
+[38;5;243m/Users/hleclerc/dev/projects/clients/alterway/odoo-operator/operator/internal/controller/odoo_controller_test.go:84[0m
+
+  [38;5;243mTimeline >>[0m
+  [1mSTEP:[0m creating the custom resource for the Kind Odoo [38;5;243m@ 12/03/25 10:35:08.336[0m
+  [1mSTEP:[0m Reconciling the created resource [38;5;243m@ 12/03/25 10:35:10.35[0m
+  2025-12-03T10:35:10+01:00	INFO	Creating PostgreSQL Secret	{"Secret.Namespace": "default", "Secret.Name": "test-resource-postgres-secret"}
+  2025-12-03T10:35:10+01:00	INFO	Creating PostgreSQL PVC	{"PVC.Namespace": "default", "PVC.Name": "test-resource-postgres-pvc"}
+  2025-12-03T10:35:10+01:00	INFO	Creating PostgreSQL Service	{"Service.Namespace": "default", "Service.Name": "test-resource-postgres-svc"}
+  2025-12-03T10:35:10+01:00	INFO	Creating PostgreSQL StatefulSet	{"StatefulSet.Namespace": "default", "StatefulSet.Name": "test-resource-postgres"}
+  2025-12-03T10:35:10+01:00	INFO	Creating a new PVC	{"PVC.Namespace": "default", "PVC.Name": "test-resource-data-pvc"}
+  2025-12-03T10:35:10+01:00	INFO	Creating a new PVC	{"PVC.Namespace": "default", "PVC.Name": "test-resource-addons-pvc"}
+  2025-12-03T10:35:10+01:00	INFO	Creating a new ConfigMap	{"ConfigMap.Namespace": "default", "ConfigMap.Name": "test-resource-config"}
+  2025-12-03T10:35:10+01:00	INFO	Creating a new DB initialization Job	{"Job.Namespace": "default", "Job.Name": "test-resource-db-init"}
+  2025-12-03T10:35:10+01:00	INFO	Updating Odoo status to DBInitializing
+  2025-12-03T10:35:10+01:00	INFO	DB initialization Job created, requeuing.
+  [1mSTEP:[0m Simulating the completion of the DB init Job [38;5;243m@ 12/03/25 10:35:10.411[0m
+  [1mSTEP:[0m Reconciling again after Job completion [38;5;243m@ 12/03/25 10:35:10.413[0m
+  2025-12-03T10:35:10+01:00	INFO	DB initialization Job completed successfully.	{"Job.Name": "test-resource-db-init"}
+  2025-12-03T10:35:10+01:00	INFO	Updating Odoo status to Creating
+  [38;5;13m[PANICKED][0m in [It] - /opt/homebrew/opt/go/libexec/src/runtime/panic.go:115 [38;5;243m@ 12/03/25 10:35:10.425[0m
+  [1mSTEP:[0m Cleaning up the Odoo resource and its dependencies [38;5;243m@ 12/03/25 10:35:10.425[0m
+  2025-12-03T10:35:10+01:00	INFO	child pods are preserved by default when jobs are deleted; set propagationPolicy=Background to remove them or set propagationPolicy=Orphan to suppress this warning
+  [38;5;243m<< Timeline[0m
+
+  [38;5;13m[PANICKED] Test Panicked[0m
+  [38;5;13mIn [1m[It][0m[38;5;13m at: [1m/opt/homebrew/opt/go/libexec/src/runtime/panic.go:115[0m [38;5;243m@ 12/03/25 10:35:10.425[0m
+
+  [38;5;13mruntime error: index out of range [1] with length 1[0m
+
+  [38;5;13mFull Stack Trace[0m
+    cloud.alterway.fr/operator/internal/controller.(*OdooReconciler).statefulSetForOdoo(0x1400006ded0, 0x140000e4f08, {0x1400057c780, 0x34}, {0x140004f56a0, 0x1d})
+    	/Users/hleclerc/dev/projects/clients/alterway/odoo-operator/operator/internal/controller/odoo_controller.go:605 +0xcd0
+    cloud.alterway.fr/operator/internal/controller.(*OdooReconciler).Reconcile(0x1400006ded0, {0x10205edb8, 0x102ef38c0}, {{{0x1019c2a2b?, 0x0?}, {0x1019cb0b2?, 0x0?}}})
+    	/Users/hleclerc/dev/projects/clients/alterway/odoo-operator/operator/internal/controller/odoo_controller.go:319 +0x20f4
+    cloud.alterway.fr/operator/internal/controller.init.func1.1.3()
+    	/Users/hleclerc/dev/projects/clients/alterway/odoo-operator/operator/internal/controller/odoo_controller_test.go:164 +0xa4c
+[38;5;243m------------------------------[0m
+
+[38;5;9m[1mSummarizing 1 Failure:[0m
+  [38;5;13m[PANICKED!][0m [0mOdoo Controller [38;5;243mWhen reconciling a resource [38;5;13m[1m[It] should successfully reconcile the resource[0m
+  [38;5;243m/opt/homebrew/opt/go/libexec/src/runtime/panic.go:115[0m
+
+[38;5;9m[1mRan 1 of 1 Specs in 6.387 seconds[0m
+[38;5;9m[1mFAIL![0m -- [38;5;10m[1m0 Passed[0m | [38;5;9m[1m1 Failed[0m | [38;5;11m[1m0 Pending[0m | [38;5;14m[1m0 Skipped[0m
+--- FAIL: TestControllers (6.39s)
+FAIL
+FAIL	cloud.alterway.fr/operator/internal/controller	6.826s
+FAIL
