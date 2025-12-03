@@ -215,8 +215,7 @@ func (in *StorageConfigurationSpec) DeepCopyInto(out *StorageConfigurationSpec) 
 	*out = *in
 	out.Data = in.Data
 	out.Logs = in.Logs
-	out.CustomAddons = in.CustomAddons
-	out.EnterpriseAddons = in.EnterpriseAddons
+	out.Addons = in.Addons
 	out.Postgres = in.Postgres
 }
 

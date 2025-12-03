@@ -99,13 +99,10 @@ type StorageConfigurationSpec struct {
 	// +optional
 	Logs StorageSpec `json:"logs,omitempty"`
 
-	// CustomAddons holds the storage configuration for the custom addons volume.
+	// Addons holds the storage configuration for the unified addons volume.
+	// This PVC is shared by both custom and enterprise addons using subPaths.
 	// +optional
-	CustomAddons StorageSpec `json:"customAddons,omitempty"`
-
-	// EnterpriseAddons holds the storage configuration for the enterprise addons volume.
-	// +optional
-	EnterpriseAddons StorageSpec `json:"enterpriseAddons,omitempty"`
+	Addons StorageSpec `json:"addons,omitempty"`
 
 	// Postgres holds the storage configuration for the managed PostgreSQL database volume.
 	// +optional

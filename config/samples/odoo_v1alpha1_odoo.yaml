@@ -21,10 +21,11 @@ spec:
   storage:
     data:
       size: "8Gi"
-    customAddons:
-      size: "2Gi"
-    enterpriseAddons:
-      size: "3Gi"
+    # Unified addons storage (contains both custom and enterprise addons)
+    addons:
+      size: "5Gi"
+      # storageClassName: "fast-ssd"  # Optional: specify storage class
+      # accessMode: ReadWriteMany      # Optional: defaults to ReadWriteMany
   
   options:
     workers: "4"

@@ -784,23 +784,8 @@ func (r *OdooReconciler) pvcForOdoo(odoo *odoov1alpha1.Odoo, name string) *corev
 		storageSpec = odoo.Spec.Storage.Logs
 		defaultSize = "2Gi"
 	case "addons":
-		// Sum the sizes of custom and enterprise addons
-		customSize := odoo.Spec.Storage.CustomAddons.Size
-		if customSize == "" {
-			customSize = "2Gi"
-		}
-		enterpriseSize := odoo.Spec.Storage.EnterpriseAddons.Size
-		if enterpriseSize == "" {
-			enterpriseSize = "3Gi"
-		}
-
-		cQ := resource.MustParse(customSize)
-		eQ := resource.MustParse(enterpriseSize)
-		cQ.Add(eQ)
-
-		storageSpec = odoo.Spec.Storage.CustomAddons // Use CustomAddons as base for other props
-		storageSpec.Size = cQ.String()
-		defaultSize = "5Gi" // Fallback if something goes wrong, though we calculated it
+		storageSpec = odoo.Spec.Storage.Addons
+		defaultSize = "5Gi"
 	}
 
 	// Apply defaults if not specified in the CR

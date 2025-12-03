@@ -133,9 +133,10 @@ spec:
                 description: Storage defines the storage configuration for the various
                   persistent volumes.
                 properties:
-                  customAddons:
-                    description: CustomAddons holds the storage configuration for
-                      the custom addons volume.
+                  addons:
+                    description: |-
+                      Addons holds the storage configuration for the unified addons volume.
+                      This PVC is shared by both custom and enterprise addons using subPaths.
                     properties:
                       accessMode:
                         description: AccessMode for the persistent volume. E.g., "ReadWriteOnce",
@@ -151,21 +152,6 @@ spec:
                   data:
                     description: Data holds the storage configuration for the main
                       Odoo data volume.
-                    properties:
-                      accessMode:
-                        description: AccessMode for the persistent volume. E.g., "ReadWriteOnce",
-                          "ReadWriteMany".
-                        type: string
-                      size:
-                        description: Size of the persistent volume. E.g., "10Gi".
-                        type: string
-                      storageClassName:
-                        description: StorageClassName for the persistent volume.
-                        type: string
-                    type: object
-                  enterpriseAddons:
-                    description: EnterpriseAddons holds the storage configuration
-                      for the enterprise addons volume.
                     properties:
                       accessMode:
                         description: AccessMode for the persistent volume. E.g., "ReadWriteOnce",
