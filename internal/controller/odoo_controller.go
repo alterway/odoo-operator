@@ -569,15 +569,13 @@ func (r *OdooReconciler) statefulSetForOdoo(odoo *odoov1alpha1.Odoo, dbHost, sec
 						VolumeMounts: []corev1.VolumeMount{
 							{Name: "odoo-data", MountPath: "/var/lib/odoo"},
 							{Name: "odoo-config", MountPath: "/etc/odoo/odoo.conf", SubPath: "odoo.conf"},
-							{Name: "enterprise-addons", MountPath: "/mnt/extra-addons/enterprise-addons", SubPath: "enterprise-addons"},
-							{Name: "custom-addons", MountPath: "/mnt/extra-addons/custom-addons", SubPath: "custom-addons"},
+							{Name: "odoo-addons-all", MountPath: "/mnt/extra-addons"},
 						},
 					}},
 					Volumes: []corev1.Volume{
 						{Name: "odoo-config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: odoo.Name + "-config"}}}},
 						{Name: "odoo-data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: odoo.Name + "-data-pvc"}}},
-						{Name: "custom-addons", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: odoo.Name + "-addons-pvc"}}},
-						{Name: "enterprise-addons", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: odoo.Name + "-addons-pvc"}}},
+						{Name: "odoo-addons-all", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: odoo.Name + "-addons-pvc"}}},
 					},
 				},
 			},
@@ -639,6 +637,16 @@ func (r *OdooReconciler) jobForOdooInit(odoo *odoov1alpha1.Odoo, dbHost, secretN
 					},
 					InitContainers: []corev1.Container{
 						{
+							Name:  "init-volumes",
+							Image: "busybox",
+							// On crée les dossiers s'ils n'existent pas
+							Command: []string{"sh", "-c", "mkdir -p /tmp/mount/enterprise-addons /tmp/mount/custom-addons; chmod -R 777 /tmp/mount/"},
+							VolumeMounts: []corev1.VolumeMount{
+								// On monte le volume SANS SubPath pour accéder à la racine
+								{Name: "odoo-addons-all", MountPath: "/tmp/mount"},
+							},
+						},
+						{
 							Name:  "wait-for-db",
 							Image: "busybox",
 							Command: []string{"sh", "-c",
@@ -664,16 +672,14 @@ func (r *OdooReconciler) jobForOdooInit(odoo *odoov1alpha1.Odoo, dbHost, secretN
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "odoo-data", MountPath: "/var/lib/odoo"},
 								{Name: "odoo-config", MountPath: "/etc/odoo/odoo.conf", SubPath: "odoo.conf"},
-								{Name: "enterprise-addons", MountPath: "/mnt/extra-addons/enterprise-addons", SubPath: "enterprise-addons"},
-								{Name: "custom-addons", MountPath: "/mnt/extra-addons/custom-addons", SubPath: "custom-addons"},
+								{Name: "odoo-addons-all", MountPath: "/mnt/extra-addons"},
 							},
 						},
 					},
 					Volumes: []corev1.Volume{
 						{Name: "odoo-config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: odoo.Name + "-config"}}}},
 						{Name: "odoo-data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: odoo.Name + "-data-pvc"}}},
-						{Name: "custom-addons", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: odoo.Name + "-addons-pvc"}}},
-						{Name: "enterprise-addons", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: odoo.Name + "-addons-pvc"}}},
+						{Name: "odoo-addons-all", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: odoo.Name + "-addons-pvc"}}},
 					},
 				},
 			},
