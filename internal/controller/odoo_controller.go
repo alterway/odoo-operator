@@ -77,6 +77,52 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, nil
 	}
 
+	// Examine if the object is being deleted
+	isOdooMarkedForDeletion := odoo.GetDeletionTimestamp() != nil
+	if isOdooMarkedForDeletion {
+		if containsString(odoo.GetFinalizers(), odoov1alpha1.OdooFinalizer) {
+			// Our finalizer is present, so we clean up any external dependencies
+			log.Info("Performing Finalizer Logic for Odoo resource")
+
+			// Check if Ingress TLS is enabled and delete the associated secret
+			if odoo.Spec.Ingress.Enabled && odoo.Spec.Ingress.TLS {
+				tlsSecretName := odoo.Name + "-tls"
+				secret := &corev1.Secret{}
+				err := r.Get(ctx, types.NamespacedName{Name: tlsSecretName, Namespace: odoo.Namespace}, secret)
+				if err != nil && !errors.IsNotFound(err) {
+					log.Error(err, "Failed to get TLS Secret for deletion")
+					return ctrl.Result{}, err
+				}
+
+				if err == nil {
+					log.Info("Deleting TLS Secret created by cert-manager", "Secret.Namespace", secret.Namespace, "Secret.Name", secret.Name)
+					if err := r.Delete(ctx, secret); err != nil {
+						log.Error(err, "Failed to delete TLS Secret")
+						return ctrl.Result{}, err
+					}
+				}
+			}
+
+			// Remove our finalizer from the list and update it.
+			odoo.SetFinalizers(removeString(odoo.GetFinalizers(), odoov1alpha1.OdooFinalizer))
+			if err := r.Update(ctx, odoo); err != nil {
+				log.Error(err, "Failed to remove finalizer from Odoo resource")
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// Add finalizer for this CR
+	if !containsString(odoo.GetFinalizers(), odoov1alpha1.OdooFinalizer) {
+		log.Info("Adding Finalizer for Odoo resource")
+		odoo.SetFinalizers(append(odoo.GetFinalizers(), odoov1alpha1.OdooFinalizer))
+		if err := r.Update(ctx, odoo); err != nil {
+			log.Error(err, "Failed to add finalizer to Odoo resource")
+			return ctrl.Result{}, err
+		}
+	}
+
 	// --- DATABASE ---
 	// Determine database host and secret name
 	var dbHost, secretName string
@@ -1105,4 +1151,25 @@ func (r *OdooReconciler) ingressForOdoo(odoo *odoov1alpha1.Odoo) *networkingv1.I
 
 func labelsForOdoo(name string) map[string]string {
 	return map[string]string{"app": "odoo", "odoo_cr": name}
+}
+
+// containsString checks if a string is present in a slice of strings.
+func containsString(slice []string, s string) bool {
+	for _, item := range slice {
+		if item == s {
+			return true
+		}
+	}
+	return false
+}
+
+// removeString removes a string from a slice of strings.
+func removeString(slice []string, s string) (result []string) {
+	for _, item := range slice {
+		if item == s {
+			continue
+		}
+		result = append(result, item)
+	}
+	return
 }

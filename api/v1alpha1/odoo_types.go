@@ -186,29 +186,24 @@ type OdooStatus struct {
 
 // Odoo is the Schema for the odoos API
 type Odoo struct {
-	metav1.TypeMeta `json:",inline"`
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	// metadata is a standard object metadata
-	// +optional
-	metav1.ObjectMeta `json:"metadata,omitzero"`
-
-	// spec defines the desired state of Odoo
-	// +required
-	Spec OdooSpec `json:"spec"`
-
-	// status defines the observed state of Odoo
-	// +optional
-	Status OdooStatus `json:"status,omitzero"`
+	Spec   OdooSpec   `json:"spec,omitempty"`
+	Status OdooStatus `json:"status,omitempty"`
 }
 
-// +kubebuilder:object:root=true
+//+kubebuilder:object:root=true
 
 // OdooList contains a list of Odoo
 type OdooList struct {
 	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitzero"`
+	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Odoo `json:"items"`
 }
+
+// OdooFinalizer is the name of the finalizer for the Odoo resource.
+const OdooFinalizer = "odoo.cloud.alterway.fr/finalizer"
 
 func init() {
 	SchemeBuilder.Register(&Odoo{}, &OdooList{})
