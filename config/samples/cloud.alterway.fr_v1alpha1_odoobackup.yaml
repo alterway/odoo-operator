@@ -1,0 +1,13 @@
+apiVersion: cloud.alterway.fr/v1alpha1
+kind: OdooBackup
+metadata:
+  name: odoobackup-sample
+spec:
+  odooRef:
+    name: odoo-sample-full
+    namespace: default
+  storageLocation:
+    pvc:
+      claimName: odoo-backup-pvc # Assurez-vous que ce PVC existe ou sera créé
+      path: /backups
+  schedule: "0 0 * * *" # Tous les jours à minuit

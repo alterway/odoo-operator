@@ -1,0 +1,14 @@
+apiVersion: cloud.alterway.fr/v1alpha1
+kind: OdooRestore
+metadata:
+  name: odoorestore-sample
+spec:
+  odooRef:
+    name: odoo-sample-full
+    namespace: default
+  backupSource:
+    # Exemple avec une référence à un OdooBackup existant
+    odooBackupRef:
+      name: odoobackup-sample
+      namespace: default
+  restoreMethod: StopAndRestore # Ou NewPVC

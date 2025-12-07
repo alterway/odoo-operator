@@ -3,6 +3,8 @@
 # It should be run by config/default
 resources:
 - bases/cloud.alterway.fr_odoos.yaml
+- bases/cloud.alterway.fr_odoobackups.yaml
+- bases/cloud.alterway.fr_oodoorestores.yaml
 #+kubebuilder:scaffold:crdkustomizeresource
 
 patches:

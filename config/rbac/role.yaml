@@ -46,6 +46,8 @@ rules:
 - apiGroups:
   - cloud.alterway.fr
   resources:
+  - odoobackups
+  - odoorestores
   - odoos
   verbs:
   - create
@@ -58,12 +60,16 @@ rules:
 - apiGroups:
   - cloud.alterway.fr
   resources:
+  - odoobackups/finalizers
+  - odoorestores/finalizers
   - odoos/finalizers
   verbs:
   - update
 - apiGroups:
   - cloud.alterway.fr
   resources:
+  - odoobackups/status
+  - odoorestores/status
   - odoos/status
   verbs:
   - get
