@@ -611,7 +611,8 @@ func (r *OdooReconciler) statefulSetForOdoo(odoo *odoov1alpha1.Odoo, dbHost, sec
 							{ContainerPort: 8069, Name: "web"},
 							{ContainerPort: 8072, Name: "longpolling"},
 						},
-						Env: append([]corev1.EnvVar{{Name: "HOST", Value: dbHost}}, envFromSecret...),
+						Resources: odoo.Spec.Resources.Odoo,
+						Env:       append([]corev1.EnvVar{{Name: "HOST", Value: dbHost}}, envFromSecret...),
 						VolumeMounts: []corev1.VolumeMount{
 							{Name: "odoo-data", MountPath: "/var/lib/odoo"},
 							{Name: "odoo-config", MountPath: "/etc/odoo/odoo.conf", SubPath: "odoo.conf"},
@@ -711,6 +712,7 @@ func (r *OdooReconciler) jobForOdooInit(odoo *odoov1alpha1.Odoo, dbHost, secretN
 							Command: []string{"sh", "-c",
 								"odoo -c /etc/odoo/odoo.conf -d $POSTGRES_DB -i base --stop-after-init -w $POSTGRES_PASSWORD -r $POSTGRES_USER",
 							},
+							Resources: odoo.Spec.Resources.Init,
 							Env: append([]corev1.EnvVar{
 								{Name: "HOST", Value: dbHost},
 								{Name: "POSTGRES_DB", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "dbname"}}},
@@ -898,6 +900,7 @@ func (r *OdooReconciler) statefulSetForPostgres(odoo *odoov1alpha1.Odoo, secretN
 						Ports: []corev1.ContainerPort{{
 							ContainerPort: 5432,
 						}},
+						Resources: odoo.Spec.Resources.Postgres,
 						Env: []corev1.EnvVar{
 							{Name: "POSTGRES_USER", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "user"}}},
 							{Name: "POSTGRES_PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "password"}}},

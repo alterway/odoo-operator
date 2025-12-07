@@ -70,6 +70,10 @@ type OdooSpec struct {
 	// +optional
 	Storage StorageConfigurationSpec `json:"storage,omitempty"`
 
+	// Resources allows setting resource requests and limits for the various containers.
+	// +optional
+	Resources OdooResources `json:"resources,omitempty"`
+
 	// Version defines the Odoo version to be deployed.
 	// This will be used as the tag for the Docker image (e.g., "19", "18.0").
 	// Defaults to "19" if not specified.
@@ -87,6 +91,22 @@ type ServiceSpec struct {
 	// Defaults to "LoadBalancer".
 	// +optional
 	Type corev1.ServiceType `json:"type,omitempty"`
+}
+
+// OdooResources holds the resource requirements for the various containers.
+type OdooResources struct {
+	// Odoo defines resources for the main Odoo container.
+	// +optional
+	Odoo corev1.ResourceRequirements `json:"odoo,omitempty"`
+
+	// Postgres defines resources for the managed Postgres container.
+	// This is ignored if using an external database.
+	// +optional
+	Postgres corev1.ResourceRequirements `json:"postgres,omitempty"`
+
+	// Init defines resources for the database initialization Job.
+	// +optional
+	Init corev1.ResourceRequirements `json:"init,omitempty"`
 }
 
 // StorageConfigurationSpec holds the storage configuration for all PVCs.
