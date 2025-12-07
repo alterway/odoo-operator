@@ -1,0 +1,16 @@
+apiVersion: cloud.alterway.fr/v1alpha1
+kind: OdooBackup
+metadata:
+  name: odoobackup-s3-sample
+spec:
+  odooRef:
+    name: odoo-sample-full
+    namespace: default
+  storageLocation:
+    s3:
+      endpoint: s3.amazonaws.com
+      bucket: my-odoo-backups
+      region: eu-west-1
+      secretRef:
+        name: s3-credentials # Assurez-vous que ce secret existe (accessKeyID, secretAccessKey)
+  schedule: "0 2 * * *" # Tous les jours à 2h du matin
