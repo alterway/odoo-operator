@@ -380,6 +380,20 @@ spec:
                         type: string
                     type: object
                 type: object
+              upgrade:
+                description: Upgrade defines the configuration for automatic module
+                  upgrades.
+                properties:
+                  enabled:
+                    description: Enabled enables the automatic migration process when
+                      the Odoo image version changes.
+                    type: boolean
+                  modules:
+                    description: |-
+                      Modules is the list of modules to upgrade (comma-separated).
+                      Defaults to "all" if not specified.
+                    type: string
+                type: object
               version:
                 description: |-
                   Version defines the Odoo version to be deployed.
@@ -452,6 +466,27 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              currentVersion:
+                description: |-
+                  CurrentVersion tracks the currently deployed version of Odoo.
+                  Used to detect version changes and trigger migrations.
+                type: string
+              migration:
+                description: Migration tracks the status of the module upgrade process.
+                properties:
+                  completionTime:
+                    description: CompletionTime is the time when the migration completed.
+                    format: date-time
+                    type: string
+                  phase:
+                    description: Phase indicates the current phase of the migration
+                      (e.g., "Pending", "Running", "Succeeded", "Failed").
+                    type: string
+                  startTime:
+                    description: StartTime is the time when the migration started.
+                    format: date-time
+                    type: string
+                type: object
               ready:
                 description: Ready is a string representation of the ready replicas
                   over the desired replicas, e.g., "1/1".

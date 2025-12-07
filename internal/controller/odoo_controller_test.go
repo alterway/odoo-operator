@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	corev1 "k8s.io/api/core/v1"
@@ -269,6 +270,128 @@ var _ = Describe("Odoo Controller", func() {
 			Expect(container.Name).To(Equal("odoo"))
 			Expect(container.Resources.Requests.Cpu().String()).To(Equal("100m"))
 			Expect(container.Resources.Limits.Memory().String()).To(Equal("500Mi"))
+		})
+	})
+
+	Context("When upgrading the Odoo version", func() {
+		const resourceName = "test-upgrade"
+		ctx := context.Background()
+		typeNamespacedName := types.NamespacedName{Name: resourceName, Namespace: "default"}
+
+		BeforeEach(func() {
+			By("creating the custom resource for upgrade test")
+			odoo := &odoov1alpha1.Odoo{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: "default",
+				},
+				Spec: odoov1alpha1.OdooSpec{
+					Size:    1,
+					Version: "16.0",
+					Upgrade: odoov1alpha1.UpgradeSpec{
+						Enabled: true,
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, odoo)).To(Succeed())
+		})
+
+		AfterEach(func() {
+			resource := &odoov1alpha1.Odoo{}
+			err := k8sClient.Get(ctx, typeNamespacedName, resource)
+			if err == nil {
+				Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			}
+			// Clean up jobs
+			jobList := &batchv1.JobList{}
+			k8sClient.List(ctx, jobList, client.InNamespace("default"))
+			for _, job := range jobList.Items {
+				k8sClient.Delete(ctx, &job)
+			}
+		})
+
+		It("should trigger an upgrade job", func() {
+			controllerReconciler := &OdooReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			// 1. Initial Deployment
+			// Call Reconcile until the DB Init Job is created
+			initJob := &batchv1.Job{}
+			Eventually(func() error {
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+				if err != nil {
+					return err
+				}
+				return k8sClient.Get(ctx, types.NamespacedName{Name: resourceName + "-db-init", Namespace: "default"}, initJob)
+			}, "10s", "1s").Should(Succeed(), "DB Init Job should be created")
+
+			// Simulate DB Init Job completion
+			initJob.Status.Succeeded = 1
+			Expect(k8sClient.Status().Update(ctx, initJob)).To(Succeed())
+
+			// Run reconcile again to update status and set CurrentVersion
+			Eventually(func() string {
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+				if err != nil {
+					return ""
+				}
+				updatedOdoo := &odoov1alpha1.Odoo{}
+				k8sClient.Get(ctx, typeNamespacedName, updatedOdoo)
+				return updatedOdoo.Status.CurrentVersion
+			}, "10s", "1s").Should(Equal("16.0"), "CurrentVersion should be set to 16.0")
+
+			// 2. Trigger Upgrade
+			updatedOdoo := &odoov1alpha1.Odoo{}
+			By("Updating Odoo version to 17.0")
+			Eventually(func() error {
+				err := k8sClient.Get(ctx, typeNamespacedName, updatedOdoo)
+				if err != nil {
+					return err
+				}
+				updatedOdoo.Spec.Version = "17.0"
+				return k8sClient.Update(ctx, updatedOdoo)
+			}, "10s", "1s").Should(Succeed())
+
+			// 3. Verify Upgrade Job
+			upgradeJob := &batchv1.Job{}
+			upgradeJobName := resourceName + "-upgrade-17-0"
+
+			// Reconcile until Upgrade Job is created
+			Eventually(func() error {
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+				if err != nil {
+					return err
+				}
+				return k8sClient.Get(ctx, types.NamespacedName{Name: upgradeJobName, Namespace: "default"}, upgradeJob)
+			}, "10s", "1s").Should(Succeed(), "Upgrade Job should be created")
+
+			// 4. Simulate Upgrade Success
+			By("Simulating upgrade job success")
+			upgradeJob.Status.Succeeded = 1
+			Expect(k8sClient.Status().Update(ctx, upgradeJob)).To(Succeed())
+
+			// 5. Verify Final State
+			// Reconcile until CurrentVersion is updated
+			Eventually(func() string {
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+				if err != nil {
+					return ""
+				}
+				k8sClient.Get(ctx, typeNamespacedName, updatedOdoo)
+				return updatedOdoo.Status.CurrentVersion
+			}, "10s", "1s").Should(Equal("17.0"), "CurrentVersion should be updated")
+
+			// Verify StatefulSet image
+			sts := &appsv1.StatefulSet{}
+			Eventually(func() string {
+				k8sClient.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: "default"}, sts)
+				if len(sts.Spec.Template.Spec.Containers) > 0 {
+					return sts.Spec.Template.Spec.Containers[0].Image
+				}
+				return ""
+			}, "10s", "1s").Should(Equal("odoo:17.0"), "StatefulSet image should be updated")
 		})
 	})
 })

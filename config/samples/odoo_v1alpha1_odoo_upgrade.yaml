@@ -1,0 +1,28 @@
+apiVersion: cloud.alterway.fr/v1alpha1
+kind: Odoo
+metadata:
+  name: odoo-upgrade-sample
+spec:
+  size: 1
+  version: "19"
+  
+  # Configuration pour les mises à jour automatiques
+  upgrade:
+    enabled: true
+    modules: "all" # Liste des modules à mettre à jour (ex: "account,sale" ou "all")
+
+  ingress:
+    enabled: true
+    host: odoo-upgrade.example.com
+    tls: true
+    annotations:
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+
+  service:
+    type: ClusterIP
+  
+  storage:
+    data:
+      size: "5Gi"
+    addons:
+      size: "2Gi"

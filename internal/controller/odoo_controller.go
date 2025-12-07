@@ -332,6 +332,102 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	// If we get here, the Job has completed successfully.
 	log.Info("DB initialization Job completed successfully.", "Job.Name", initJob.Name)
 
+	// --- ODOO UPGRADE ---
+	// Check if we need to run an upgrade (migration)
+	currentVersion := odoo.Status.CurrentVersion
+	targetVersion := odoo.Spec.Version
+	if targetVersion == "" {
+		targetVersion = "19" // default
+	}
+
+	// First installation case: if CurrentVersion is empty, we assume the DB init job
+	// installed the target version. We just update the status.
+	if currentVersion == "" {
+		if odoo.Status.CurrentVersion != targetVersion {
+			log.Info("First installation detected, setting CurrentVersion", "Version", targetVersion)
+			odoo.Status.CurrentVersion = targetVersion
+			if err := r.Status().Update(ctx, odoo); err != nil {
+				log.Error(err, "Failed to update Odoo status (CurrentVersion)")
+				return ctrl.Result{}, err
+			}
+		}
+	} else if currentVersion != targetVersion && odoo.Spec.Upgrade.Enabled {
+		// Version mismatch and upgrade enabled -> trigger upgrade job
+
+		// Determine job name
+		safeVersion := strings.ReplaceAll(targetVersion, ".", "-")
+		upgradeJobName := fmt.Sprintf("%s-upgrade-%s", odoo.Name, safeVersion)
+		upgradeJob := &batchv1.Job{}
+		err = r.Get(ctx, types.NamespacedName{Name: upgradeJobName, Namespace: odoo.Namespace}, upgradeJob)
+
+		if err != nil && errors.IsNotFound(err) {
+			// Job doesn't exist, create it
+			job := r.jobForOdooUpgrade(odoo, dbHost, secretName)
+			log.Info("Creating a new Upgrade Job", "Job.Namespace", job.Namespace, "Job.Name", job.Name)
+			if err := r.Create(ctx, job); err != nil {
+				log.Error(err, "Failed to create Upgrade Job")
+				return ctrl.Result{}, err
+			}
+
+			// Update status
+			log.Info("Updating Odoo status to Upgrading")
+			r.setOdooCondition(&odoo.Status, metav1.Condition{
+				Type:    "Available",
+				Status:  metav1.ConditionFalse,
+				Reason:  "Upgrading",
+				Message: fmt.Sprintf("Upgrading to version %s", targetVersion),
+			})
+			odoo.Status.Migration = odoov1alpha1.MigrationStatus{
+				Phase:     "Running",
+				StartTime: &metav1.Time{Time: time.Now()},
+			}
+			if err := r.Status().Update(ctx, odoo); err != nil {
+				log.Error(err, "Failed to update Odoo status for upgrade start")
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{Requeue: true}, nil
+
+		} else if err != nil {
+			log.Error(err, "Failed to get Upgrade Job")
+			return ctrl.Result{}, err
+		}
+
+		// Job exists, check status
+		if upgradeJob.Status.Succeeded == 0 {
+			if upgradeJob.Status.Failed > 0 {
+				// Failed
+				log.Error(fmt.Errorf("Upgrade Job failed"), "Job.Name", upgradeJobName)
+				r.setOdooCondition(&odoo.Status, metav1.Condition{
+					Type:    "Available",
+					Status:  metav1.ConditionFalse,
+					Reason:  "UpgradeFailed",
+					Message: "The upgrade job failed.",
+				})
+				odoo.Status.Migration.Phase = "Failed"
+				if err := r.Status().Update(ctx, odoo); err != nil {
+					log.Error(err, "Failed to update Odoo status for upgrade failure")
+				}
+				return ctrl.Result{}, fmt.Errorf("upgrade job failed")
+			}
+			// Running
+			log.Info("Upgrade Job is still running", "Job.Name", upgradeJobName)
+			return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+		}
+
+		// Succeeded
+		log.Info("Upgrade Job completed successfully", "Job.Name", upgradeJobName)
+		odoo.Status.CurrentVersion = targetVersion
+		odoo.Status.Migration.Phase = "Succeeded"
+		completionTime := metav1.Now()
+		odoo.Status.Migration.CompletionTime = &completionTime
+
+		if err := r.Status().Update(ctx, odoo); err != nil {
+			log.Error(err, "Failed to update Odoo status after upgrade success")
+			return ctrl.Result{}, err
+		}
+		// Continue to update StatefulSet...
+	}
+
 	// Check if the statefulset already exists before setting the status to "Creating".
 	// This prevents status flapping on subsequent reconciliations.
 	foundSts := &appsv1.StatefulSet{}
@@ -389,6 +485,25 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		// pods be created on the cluster side and the operand be able
 		// to do the next update step accurately.
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
+	}
+
+	// Ensure the statefulset image matches the spec
+	// Regenerate the desired statefulset to get the expected image
+	desiredSts := r.statefulSetForOdoo(odoo, dbHost, secretName)
+	if len(found.Spec.Template.Spec.Containers) > 0 && len(desiredSts.Spec.Template.Spec.Containers) > 0 {
+		desiredImage := desiredSts.Spec.Template.Spec.Containers[0].Image
+		currentImage := found.Spec.Template.Spec.Containers[0].Image
+
+		if currentImage != desiredImage {
+			log.Info("Updating StatefulSet image", "Current", currentImage, "Desired", desiredImage)
+			found.Spec.Template.Spec.Containers[0].Image = desiredImage
+			err = r.Update(ctx, found)
+			if err != nil {
+				log.Error(err, "Failed to update StatefulSet image")
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{Requeue: true}, nil
+		}
 	}
 
 	// Determine if log volume is enabled (default is true)
@@ -713,6 +828,113 @@ func (r *OdooReconciler) jobForOdooInit(odoo *odoov1alpha1.Odoo, dbHost, secretN
 								"odoo -c /etc/odoo/odoo.conf -d $POSTGRES_DB -i base --stop-after-init -w $POSTGRES_PASSWORD -r $POSTGRES_USER",
 							},
 							Resources: odoo.Spec.Resources.Init,
+							Env: append([]corev1.EnvVar{
+								{Name: "HOST", Value: dbHost},
+								{Name: "POSTGRES_DB", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "dbname"}}},
+							}, envFromSecret...),
+							VolumeMounts: []corev1.VolumeMount{
+								{Name: "odoo-data", MountPath: "/var/lib/odoo"},
+								{Name: "odoo-config", MountPath: "/etc/odoo/odoo.conf", SubPath: "odoo.conf"},
+								{Name: "odoo-addons-all", MountPath: "/mnt/extra-addons"},
+							},
+						},
+					},
+					Volumes: []corev1.Volume{
+						{Name: "odoo-config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: odoo.Name + "-config"}}}},
+						{Name: "odoo-data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: odoo.Name + "-data-pvc"}}},
+						{Name: "odoo-addons-all", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: odoo.Name + "-addons-pvc"}}},
+					},
+				},
+			},
+		},
+	}
+	// Conditionally add log volume mount if enabled
+	logVolumeEnabled := odoo.Spec.Logs.VolumeEnabled == nil || *odoo.Spec.Logs.VolumeEnabled
+	if logVolumeEnabled {
+		logVolume := corev1.Volume{
+			Name: "odoo-logs",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: odoo.Name + "-logs-pvc",
+				},
+			},
+		}
+		job.Spec.Template.Spec.Volumes = append(job.Spec.Template.Spec.Volumes, logVolume)
+
+		logVolumeMount := corev1.VolumeMount{
+			Name:      "odoo-logs",
+			MountPath: "/var/log/odoo",
+		}
+		job.Spec.Template.Spec.Containers[0].VolumeMounts = append(job.Spec.Template.Spec.Containers[0].VolumeMounts, logVolumeMount)
+	}
+
+	ctrl.SetControllerReference(odoo, job, r.Scheme)
+	return job
+}
+
+func (r *OdooReconciler) jobForOdooUpgrade(odoo *odoov1alpha1.Odoo, dbHost, secretName string) *batchv1.Job {
+	ls := labelsForOdoo(odoo.Name)
+	odooVersion := odoo.Spec.Version
+	// We use the NEW version for the upgrade job
+	if odooVersion == "" {
+		odooVersion = "19"
+	}
+	odooImage := fmt.Sprintf("odoo:%s", odooVersion)
+
+	// Define environment variables from secret
+	envFromSecret := []corev1.EnvVar{
+		{Name: "POSTGRES_USER", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "user"}}},
+		{Name: "POSTGRES_PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "password"}}},
+	}
+
+	modules := odoo.Spec.Upgrade.Modules
+	if modules == "" {
+		modules = "all"
+	}
+
+	// Generate a deterministic name for the upgrade job based on version
+	// Note: In a real scenario, we might want a hash of the full spec or a timestamp,
+	// but here we bind it to the version change.
+	// Clean version string to be a valid DNS label
+	safeVersion := strings.ReplaceAll(odooVersion, ".", "-")
+	jobName := fmt.Sprintf("%s-upgrade-%s", odoo.Name, safeVersion)
+
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      jobName,
+			Namespace: odoo.Namespace,
+			Labels:    ls,
+		},
+		Spec: batchv1.JobSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyOnFailure,
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsUser:  func() *int64 { i := int64(0); return &i }(),
+						RunAsGroup: func() *int64 { i := int64(0); return &i }(),
+						FSGroup:    func() *int64 { i := int64(0); return &i }(),
+					},
+					InitContainers: []corev1.Container{
+						{
+							Name:  "wait-for-db",
+							Image: "busybox",
+							Command: []string{"sh", "-c",
+								"until nc -z $DB_HOST $DB_PORT; do echo waiting for db; sleep 2; done;",
+							},
+							Env: []corev1.EnvVar{
+								{Name: "DB_HOST", Value: dbHost},
+								{Name: "DB_PORT", Value: "5432"},
+							},
+						},
+					},
+					Containers: []corev1.Container{
+						{
+							Name:  "odoo-upgrade",
+							Image: odooImage,
+							Command: []string{"sh", "-c",
+								fmt.Sprintf("odoo -c /etc/odoo/odoo.conf -d $POSTGRES_DB -u %s --stop-after-init -w $POSTGRES_PASSWORD -r $POSTGRES_USER", modules),
+							},
+							Resources: odoo.Spec.Resources.Init, // Reuse init resources or add dedicated ones
 							Env: append([]corev1.EnvVar{
 								{Name: "HOST", Value: dbHost},
 								{Name: "POSTGRES_DB", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "dbname"}}},

@@ -74,6 +74,10 @@ type OdooSpec struct {
 	// +optional
 	Resources OdooResources `json:"resources,omitempty"`
 
+	// Upgrade defines the configuration for automatic module upgrades.
+	// +optional
+	Upgrade UpgradeSpec `json:"upgrade,omitempty"`
+
 	// Version defines the Odoo version to be deployed.
 	// This will be used as the tag for the Docker image (e.g., "19", "18.0").
 	// Defaults to "19" if not specified.
@@ -107,6 +111,18 @@ type OdooResources struct {
 	// Init defines resources for the database initialization Job.
 	// +optional
 	Init corev1.ResourceRequirements `json:"init,omitempty"`
+}
+
+// UpgradeSpec defines the configuration for automatic module upgrades.
+type UpgradeSpec struct {
+	// Enabled enables the automatic migration process when the Odoo image version changes.
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+
+	// Modules is the list of modules to upgrade (comma-separated).
+	// Defaults to "all" if not specified.
+	// +optional
+	Modules string `json:"modules,omitempty"`
 }
 
 // StorageConfigurationSpec holds the storage configuration for all PVCs.
@@ -191,11 +207,35 @@ type OdooStatus struct {
 	// +optional
 	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
 
+	// CurrentVersion tracks the currently deployed version of Odoo.
+	// Used to detect version changes and trigger migrations.
+	// +optional
+	CurrentVersion string `json:"currentVersion,omitempty"`
+
 	// conditions represent the current state of the Odoo resource.
 	// +listType=map
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
+
+	// Migration tracks the status of the module upgrade process.
+	// +optional
+	Migration MigrationStatus `json:"migration,omitempty"`
+}
+
+// MigrationStatus defines the status of a migration operation.
+type MigrationStatus struct {
+	// Phase indicates the current phase of the migration (e.g., "Pending", "Running", "Succeeded", "Failed").
+	// +optional
+	Phase string `json:"phase,omitempty"`
+
+	// StartTime is the time when the migration started.
+	// +optional
+	StartTime *metav1.Time `json:"startTime,omitempty"`
+
+	// CompletionTime is the time when the migration completed.
+	// +optional
+	CompletionTime *metav1.Time `json:"completionTime,omitempty"`
 }
 
 // +kubebuilder:object:root=true
