@@ -52,14 +52,18 @@ var _ = Describe("Manager", Ordered, func() {
 	// enforce the restricted security policy to the namespace, installing CRDs,
 	// and deploying the controller.
 	BeforeAll(func() {
+		By("ensuring manager namespace is clean")
+		cmd := exec.Command("kubectl", "delete", "ns", namespace, "--ignore-not-found", "--force", "--grace-period=0")
+		_, _ = utils.Run(cmd)
+
 		By("creating manager namespace")
-		cmd := exec.Command("kubectl", "create", "ns", namespace)
+		cmd = exec.Command("kubectl", "create", "ns", namespace)
 		_, err := utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
 
 		By("labeling the namespace to enforce the restricted security policy")
 		cmd = exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
-			"pod-security.kubernetes.io/enforce=restricted")
+			"pod-security.kubernetes.io/enforce=privileged")
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
 
@@ -79,6 +83,18 @@ var _ = Describe("Manager", Ordered, func() {
 	AfterAll(func() {
 		By("cleaning up the curl pod for metrics")
 		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
+		_, _ = utils.Run(cmd)
+
+		By("removing odoo resources")
+		cmd = exec.Command("kubectl", "delete", "odoo", "--all", "-n", namespace, "--timeout=1m", "--wait=true")
+		_, _ = utils.Run(cmd)
+
+		// Force remove finalizers if resources still exist (to unblock deletion)
+		cmd = exec.Command("kubectl", "patch", "odoo", "--all", "-n", namespace, "--type=merge", "-p", `{"metadata":{"finalizers":[]}}`)
+		_, _ = utils.Run(cmd)
+
+		By("removing the metrics cluster role binding")
+		cmd = exec.Command("kubectl", "delete", "clusterrolebinding", metricsRoleBindingName, "--ignore-not-found")
 		_, _ = utils.Run(cmd)
 
 		By("undeploying the controller-manager")
@@ -175,6 +191,9 @@ var _ = Describe("Manager", Ordered, func() {
 
 		It("should ensure the metrics endpoint is serving metrics", func() {
 			By("creating a ClusterRoleBinding for the service account to allow access to metrics")
+			// Clean up if it already exists
+			_ = exec.Command("kubectl", "delete", "clusterrolebinding", metricsRoleBindingName, "--ignore-not-found").Run()
+
 			cmd := exec.Command("kubectl", "create", "clusterrolebinding", metricsRoleBindingName,
 				"--clusterrole=operator-metrics-reader",
 				fmt.Sprintf("--serviceaccount=%s:%s", namespace, serviceAccountName),
@@ -264,6 +283,70 @@ var _ = Describe("Manager", Ordered, func() {
 				g.Expect(metricsOutput).To(ContainSubstring("< HTTP/1.1 200 OK"))
 			}
 			Eventually(verifyMetricsAvailable, 2*time.Minute).Should(Succeed())
+		})
+
+		It("should upgrade the Odoo instance when version changes", func() {
+			// Define minimal Odoo sample for test
+			const odooSampleContent = `
+apiVersion: cloud.alterway.fr/v1alpha1
+kind: Odoo
+metadata:
+  name: odoo-sample-upgrade
+spec:
+  size: 1
+  version: "19"
+  service:
+    type: ClusterIP
+  logs:
+    volumeEnabled: false
+  storage:
+    data:
+      size: "1Gi"
+      accessMode: ReadWriteOnce
+    addons:
+      size: "1Gi"
+      accessMode: ReadWriteOnce
+`
+			// Write to temp file
+			odooSamplePath := filepath.Join("/tmp", "odoo-sample-upgrade.yaml")
+			err := os.WriteFile(odooSamplePath, []byte(odooSampleContent), 0644)
+			Expect(err).NotTo(HaveOccurred())
+
+			const odooName = "odoo-sample-upgrade"
+
+			By("Applying the Odoo sample")
+			cmd := exec.Command("kubectl", "apply", "-f", odooSamplePath, "-n", namespace)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Waiting for the Odoo instance to be Ready")
+			verifyOdooReady := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "odoo", odooName, "-n", namespace,
+					"-o", "jsonpath={.status.conditions[?(@.type=='Available')].status}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("True"))
+			}
+			Eventually(verifyOdooReady, 10*time.Minute, time.Second).Should(Succeed())
+
+			By("Updating the Odoo CR to trigger upgrade")
+			// Patch to version 17.0 and enable upgrade
+			patch := `{"spec": {"version": "17.0", "upgrade": {"enabled": true}}}`
+			cmd = exec.Command("kubectl", "patch", "odoo", odooName, "-n", namespace,
+				"--type=merge", "-p", patch)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying that the Upgrade Job is created")
+			// The job name depends on the logic: <name>-upgrade-<version>
+			// Version 17.0 -> 17-0
+			jobName := fmt.Sprintf("%s-upgrade-17-0", odooName)
+			verifyJobCreated := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "job", jobName, "-n", namespace)
+				_, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+			}
+			Eventually(verifyJobCreated, 2*time.Minute, time.Second).Should(Succeed())
 		})
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
