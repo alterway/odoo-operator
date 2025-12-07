@@ -26,6 +26,29 @@ spec:
       size: "5Gi"
       # storageClassName: "fast-ssd"  # Optional: specify storage class
       # accessMode: ReadWriteMany      # Optional: defaults to ReadWriteMany
+
+  resources:
+    odoo:
+      requests:
+        cpu: "500m"
+        memory: "512Mi"
+      limits:
+        cpu: "1000m"
+        memory: "1Gi"
+    postgres:
+      requests:
+        cpu: "250m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+    init:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "200m"
+        memory: "256Mi"
   
   options:
     workers: "4"

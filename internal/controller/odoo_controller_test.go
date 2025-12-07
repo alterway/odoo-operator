@@ -24,6 +24,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -147,7 +148,7 @@ var _ = Describe("Odoo Controller", func() {
 			}, "20s", "2s").Should(Succeed(), "should create the db-init job")
 
 			// Check that the PVCs are mounted in the Job
-			expectedVolumeMounts := []string{"odoo-data", "odoo-config", "enterprise-addons", "custom-addons", "odoo-logs"}
+			expectedVolumeMounts := []string{"odoo-data", "odoo-config", "odoo-addons-all", "odoo-logs"}
 			actualVolumeMounts := []string{}
 			for _, vm := range dbInitJob.Spec.Template.Spec.Containers[0].VolumeMounts {
 				actualVolumeMounts = append(actualVolumeMounts, vm.Name)
@@ -176,6 +177,98 @@ var _ = Describe("Odoo Controller", func() {
 			// Verify that the init container is no longer present
 			Expect(odooSts.Spec.Template.Spec.InitContainers).To(HaveLen(1), "should only have one init container for waiting on DB")
 			Expect(odooSts.Spec.Template.Spec.InitContainers[0].Name).To(Equal("wait-for-db"))
+		})
+	})
+
+	Context("When specifying resource requirements", func() {
+		const resourceName = "test-resource-limits"
+		ctx := context.Background()
+		typeNamespacedName := types.NamespacedName{Name: resourceName, Namespace: "default"}
+
+		BeforeEach(func() {
+			By("creating the custom resource with resource limits")
+			odoo := &odoov1alpha1.Odoo{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: "default",
+				},
+				Spec: odoov1alpha1.OdooSpec{
+					Size: 1,
+					Resources: odoov1alpha1.OdooResources{
+						Odoo: corev1.ResourceRequirements{
+							Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m")},
+							Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("500Mi")},
+						},
+						Postgres: corev1.ResourceRequirements{
+							Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")},
+						},
+						Init: corev1.ResourceRequirements{
+							Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("200Mi")},
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, odoo)).To(Succeed())
+		})
+
+		AfterEach(func() {
+			resource := &odoov1alpha1.Odoo{}
+			err := k8sClient.Get(ctx, typeNamespacedName, resource)
+			if err == nil {
+				Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			}
+			// Clean up jobs if they exist
+			job := &batchv1.Job{}
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: resourceName + "-db-init", Namespace: "default"}, job)
+			if err == nil {
+				k8sClient.Delete(ctx, job)
+			}
+		})
+
+		It("should propagate resources to pods", func() {
+			controllerReconciler := &OdooReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			// Run reconcile loop multiple times to create all resources
+			for i := 0; i < 10; i++ {
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			// Verify Postgres StatefulSet resources
+			pgSts := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{Name: resourceName + "-postgres", Namespace: "default"}, pgSts)
+			}, "10s", "1s").Should(Succeed())
+			Expect(pgSts.Spec.Template.Spec.Containers[0].Resources.Requests.Cpu().String()).To(Equal("200m"))
+
+			// Verify Init Job resources
+			initJob := &batchv1.Job{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{Name: resourceName + "-db-init", Namespace: "default"}, initJob)
+			}, "10s", "1s").Should(Succeed())
+			Expect(initJob.Spec.Template.Spec.Containers[0].Resources.Limits.Memory().String()).To(Equal("200Mi"))
+
+			// Simulate Job completion
+			initJob.Status.Succeeded = 1
+			Expect(k8sClient.Status().Update(ctx, initJob)).To(Succeed())
+
+			// Run reconcile again to create Odoo StatefulSet
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify Odoo StatefulSet resources
+			odooSts := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: "default"}, odooSts)
+			}, "10s", "1s").Should(Succeed())
+
+			container := odooSts.Spec.Template.Spec.Containers[0]
+			Expect(container.Name).To(Equal("odoo"))
+			Expect(container.Resources.Requests.Cpu().String()).To(Equal("100m"))
+			Expect(container.Resources.Limits.Memory().String()).To(Equal("500Mi"))
 		})
 	})
 })
