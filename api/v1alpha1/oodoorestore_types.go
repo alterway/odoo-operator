@@ -75,11 +75,11 @@ type OdooRestoreStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 }
 
-//+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
-//+kubebuilder:printcolumn:name="Odoo Instance",type="string",JSONPath=".spec.odooRef.name"
-//+kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].reason"
-//+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Odoo Instance",type="string",JSONPath=".spec.odooRef.name"
+// +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].reason"
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // OdooRestore is the Schema for the odoorestores API
 type OdooRestore struct {
@@ -90,7 +90,7 @@ type OdooRestore struct {
 	Status OdooRestoreStatus `json:"status,omitempty"`
 }
 
-//+kubebuilder:object:root=true
+// +kubebuilder:object:root=true
 
 // OdooRestoreList contains a list of OdooRestore
 type OdooRestoreList struct {

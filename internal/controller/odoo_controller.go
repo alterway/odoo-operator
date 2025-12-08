@@ -58,17 +58,9 @@ type OdooReconciler struct {
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the Odoo object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.4/pkg/reconcile
 func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	// Fetch the Odoo instance
 	odoo := &odoov1alpha1.Odoo{}
 	err := r.Get(ctx, req.NamespacedName, odoo)
 	if err != nil {
@@ -76,47 +68,14 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			log.Error(err, "unable to fetch Odoo")
 			return ctrl.Result{}, err
 		}
-		// Odoo resource not found, maybe deleted, ignore
 		return ctrl.Result{}, nil
 	}
 
-	// Examine if the object is being deleted
-	isOdooMarkedForDeletion := odoo.GetDeletionTimestamp() != nil
-	if isOdooMarkedForDeletion {
-		if containsString(odoo.GetFinalizers(), odoov1alpha1.OdooFinalizer) {
-			// Our finalizer is present, so we clean up any external dependencies
-			log.Info("Performing Finalizer Logic for Odoo resource")
-
-			// Check if Ingress TLS is enabled and delete the associated secret
-			if odoo.Spec.Ingress.Enabled && odoo.Spec.Ingress.TLS {
-				tlsSecretName := odoo.Name + "-tls"
-				secret := &corev1.Secret{}
-				err := r.Get(ctx, types.NamespacedName{Name: tlsSecretName, Namespace: odoo.Namespace}, secret)
-				if err != nil && !errors.IsNotFound(err) {
-					log.Error(err, "Failed to get TLS Secret for deletion")
-					return ctrl.Result{}, err
-				}
-
-				if err == nil {
-					log.Info("Deleting TLS Secret created by cert-manager", "Secret.Namespace", secret.Namespace, "Secret.Name", secret.Name)
-					if err := r.Delete(ctx, secret); err != nil {
-						log.Error(err, "Failed to delete TLS Secret")
-						return ctrl.Result{}, err
-					}
-				}
-			}
-
-			// Remove our finalizer from the list and update it.
-			odoo.SetFinalizers(removeString(odoo.GetFinalizers(), odoov1alpha1.OdooFinalizer))
-			if err := r.Update(ctx, odoo); err != nil {
-				log.Error(err, "Failed to remove finalizer from Odoo resource")
-				return ctrl.Result{}, err
-			}
-		}
-		return ctrl.Result{}, nil
+	if res, err := r.handleFinalizer(ctx, odoo); res != nil || err != nil {
+		return *res, err
 	}
 
-	// Add finalizer for this CR
+	// Add Finalizer if not present
 	if !containsString(odoo.GetFinalizers(), odoov1alpha1.OdooFinalizer) {
 		log.Info("Adding Finalizer for Odoo resource")
 		odoo.SetFinalizers(append(odoo.GetFinalizers(), odoov1alpha1.OdooFinalizer))
@@ -126,8 +85,90 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 	}
 
-	// --- DATABASE ---
-	// Determine database host and secret name
+	dbHost, secretName, res, err := r.reconcileDatabase(ctx, odoo)
+	if res != nil || err != nil {
+		return *res, err
+	}
+
+	if res, err := r.reconcilePVCs(ctx, odoo); res != nil || err != nil {
+		return *res, err
+	}
+
+	if res, err := r.reconcileAddonsDownload(ctx, odoo); res != nil || err != nil {
+		return *res, err
+	}
+
+	if res, err := r.reconcileConfigMap(ctx, odoo, dbHost); res != nil || err != nil {
+		return *res, err
+	}
+
+	if res, err := r.reconcileInitJob(ctx, odoo, dbHost, secretName); res != nil || err != nil {
+		return *res, err
+	}
+
+	if res, err := r.reconcileUpgrade(ctx, odoo, dbHost, secretName); res != nil || err != nil {
+		return *res, err
+	}
+
+	if res, err := r.reconcileModulesUpdate(ctx, odoo, dbHost, secretName); res != nil || err != nil {
+		return *res, err
+	}
+
+	if res, err := r.reconcileStatefulSet(ctx, odoo, dbHost, secretName); res != nil || err != nil {
+		return *res, err
+	}
+
+	if res, err := r.reconcileServices(ctx, odoo); res != nil || err != nil {
+		return *res, err
+	}
+
+	if res, err := r.reconcileIngress(ctx, odoo); res != nil || err != nil {
+		return *res, err
+	}
+
+	defer r.updateStatus(ctx, req)
+
+	return ctrl.Result{}, nil
+}
+
+// handleFinalizer contains the logic for cleaning up external dependencies before Odoo resource deletion.
+func (r *OdooReconciler) handleFinalizer(ctx context.Context, odoo *odoov1alpha1.Odoo) (*ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	isOdooMarkedForDeletion := odoo.GetDeletionTimestamp() != nil
+	if isOdooMarkedForDeletion {
+		if containsString(odoo.GetFinalizers(), odoov1alpha1.OdooFinalizer) {
+			log.Info("Performing Finalizer Logic for Odoo resource")
+			if odoo.Spec.Ingress.Enabled && odoo.Spec.Ingress.TLS {
+				tlsSecretName := odoo.Name + "-tls"
+				secret := &corev1.Secret{}
+				err := r.Get(ctx, types.NamespacedName{Name: tlsSecretName, Namespace: odoo.Namespace}, secret)
+				if err != nil && !errors.IsNotFound(err) {
+					log.Error(err, "Failed to get TLS Secret for deletion")
+					return &ctrl.Result{}, err
+				}
+				if err == nil {
+					log.Info("Deleting TLS Secret created by cert-manager", "Secret.Namespace", secret.Namespace, "Secret.Name", secret.Name)
+					if err := r.Delete(ctx, secret); err != nil {
+						log.Error(err, "Failed to delete TLS Secret")
+						return &ctrl.Result{}, err
+					}
+				}
+			}
+			odoo.SetFinalizers(removeString(odoo.GetFinalizers(), odoov1alpha1.OdooFinalizer))
+			if err := r.Update(ctx, odoo); err != nil {
+				log.Error(err, "Failed to remove finalizer from Odoo resource")
+				return &ctrl.Result{}, err
+			}
+		}
+		return &ctrl.Result{}, nil
+	}
+	return nil, nil
+}
+
+// reconcileDatabase manages the PostgreSQL database, either external or managed.
+// It returns the DB host, secret name, and any reconciliation result/error.
+func (r *OdooReconciler) reconcileDatabase(ctx context.Context, odoo *odoov1alpha1.Odoo) (string, string, *ctrl.Result, error) {
+	log := logf.FromContext(ctx)
 	var dbHost, secretName string
 	isExternalDB := odoo.Spec.Database.Host != ""
 
@@ -135,53 +176,45 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		dbHost = odoo.Spec.Database.Host
 		secretName = odoo.Spec.DatabaseSecretName
 		if secretName == "" {
-			// In external mode, a secret is required.
-			// We could set a condition here to notify the user.
 			log.Error(fmt.Errorf("databaseSecretName must be provided when using an external database"), "validation error")
-			// For now, let's stop reconciliation
-			return ctrl.Result{}, fmt.Errorf("databaseSecretName must be provided when using an external database")
+			return "", "", &ctrl.Result{}, fmt.Errorf("databaseSecretName must be provided when using an external database")
 		}
 	} else {
-		// Managed database mode
 		dbHost = fmt.Sprintf("%s-postgres-svc.%s.svc.cluster.local", odoo.Name, odoo.Namespace)
 		secretName = odoo.Spec.DatabaseSecretName
 		if secretName == "" {
-			secretName = odoo.Name + "-postgres-secret" // Default secret name
-
-			// Ensure the default secret exists
+			secretName = odoo.Name + "-postgres-secret"
 			secret := &corev1.Secret{}
-			err = r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: odoo.Namespace}, secret)
+			err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: odoo.Namespace}, secret)
 			if err != nil && errors.IsNotFound(err) {
 				sec := r.secretForPostgres(odoo, secretName)
 				log.Info("Creating PostgreSQL Secret", "Secret.Namespace", sec.Namespace, "Secret.Name", sec.Name)
 				if err := r.Create(ctx, sec); err != nil {
 					log.Error(err, "Failed to create PostgreSQL Secret")
-					return ctrl.Result{}, err
+					return "", "", &ctrl.Result{}, err
 				}
-				return ctrl.Result{Requeue: true}, nil
+				return "", "", &ctrl.Result{Requeue: true}, nil
 			} else if err != nil {
 				log.Error(err, "Failed to get PostgreSQL Secret")
-				return ctrl.Result{}, err
+				return "", "", &ctrl.Result{}, err
 			}
 		}
 
-		// Ensure PostgreSQL PVC exists
 		pgPvc := &corev1.PersistentVolumeClaim{}
-		err = r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-postgres-pvc", Namespace: odoo.Namespace}, pgPvc)
+		err := r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-postgres-pvc", Namespace: odoo.Namespace}, pgPvc)
 		if err != nil && errors.IsNotFound(err) {
 			pvc := r.pvcForPostgres(odoo)
 			log.Info("Creating PostgreSQL PVC", "PVC.Namespace", pvc.Namespace, "PVC.Name", pvc.Name)
 			if err := r.Create(ctx, pvc); err != nil {
 				log.Error(err, "Failed to create PostgreSQL PVC")
-				return ctrl.Result{}, err
+				return "", "", &ctrl.Result{}, err
 			}
-			return ctrl.Result{Requeue: true}, nil
+			return "", "", &ctrl.Result{Requeue: true}, nil
 		} else if err != nil {
 			log.Error(err, "Failed to get PostgreSQL PVC")
-			return ctrl.Result{}, err
+			return "", "", &ctrl.Result{}, err
 		}
 
-		// Ensure PostgreSQL Service exists
 		pgSvc := &corev1.Service{}
 		err = r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-postgres-svc", Namespace: odoo.Namespace}, pgSvc)
 		if err != nil && errors.IsNotFound(err) {
@@ -189,15 +222,14 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			log.Info("Creating PostgreSQL Service", "Service.Namespace", svc.Namespace, "Service.Name", svc.Name)
 			if err := r.Create(ctx, svc); err != nil {
 				log.Error(err, "Failed to create PostgreSQL Service")
-				return ctrl.Result{}, err
+				return "", "", &ctrl.Result{}, err
 			}
-			return ctrl.Result{Requeue: true}, nil
+			return "", "", &ctrl.Result{Requeue: true}, nil
 		} else if err != nil {
 			log.Error(err, "Failed to get PostgreSQL Service")
-			return ctrl.Result{}, err
+			return "", "", &ctrl.Result{}, err
 		}
 
-		// Ensure PostgreSQL StatefulSet exists
 		pgSts := &appsv1.StatefulSet{}
 		err = r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-postgres", Namespace: odoo.Namespace}, pgSts)
 		if err != nil && errors.IsNotFound(err) {
@@ -205,37 +237,45 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			log.Info("Creating PostgreSQL StatefulSet", "StatefulSet.Namespace", sts.Namespace, "StatefulSet.Name", sts.Name)
 			if err := r.Create(ctx, sts); err != nil {
 				log.Error(err, "Failed to create PostgreSQL StatefulSet")
-				return ctrl.Result{}, err
+				return "", "", &ctrl.Result{}, err
 			}
-			return ctrl.Result{Requeue: true}, nil
+			return "", "", &ctrl.Result{Requeue: true}, nil
 		} else if err != nil {
 			log.Error(err, "Failed to get PostgreSQL StatefulSet")
-			return ctrl.Result{}, err
+			return "", "", &ctrl.Result{}, err
 		}
 	}
+	return dbHost, secretName, nil, nil
+}
 
-	// Create the PVCs if they don't exist
+// reconcilePVCs manages the creation of data and addons PVCs for Odoo.
+func (r *OdooReconciler) reconcilePVCs(ctx context.Context, odoo *odoov1alpha1.Odoo) (*ctrl.Result, error) {
+	log := logf.FromContext(ctx)
 	pvcNames := []string{"data", "addons"}
 	for _, pvcName := range pvcNames {
 		pvc := &corev1.PersistentVolumeClaim{}
-		err = r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-" + pvcName + "-pvc", Namespace: odoo.Namespace}, pvc)
+		err := r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-" + pvcName + "-pvc", Namespace: odoo.Namespace}, pvc)
 		if err != nil && errors.IsNotFound(err) {
 			pvc := r.pvcForOdoo(odoo, pvcName)
 			log.Info("Creating a new PVC", "PVC.Namespace", pvc.Namespace, "PVC.Name", pvc.Name)
 			if err := r.Create(ctx, pvc); err != nil {
 				log.Error(err, "Failed to create new PVC", "PVC.Namespace", pvc.Namespace, "PVC.Name", pvc.Name)
-				return ctrl.Result{}, err
+				return &ctrl.Result{}, err
 			}
-			return ctrl.Result{Requeue: true}, nil
+			return &ctrl.Result{Requeue: true}, nil
 		} else if err != nil {
 			log.Error(err, "Failed to get PVC")
-			return ctrl.Result{}, err
+			return &ctrl.Result{}, err
 		}
 	}
+	return nil, nil
+}
 
-	// --- ADDONS DOWNLOAD & SETUP ---
-	var repositoriesToClone []odoov1alpha1.GitRepositorySpec
-	var requiredSSHSecrets []string
+// reconcileAddonsDownload manages the Job for cloning custom and enterprise Git repositories into the addons volume.
+func (r *OdooReconciler) reconcileAddonsDownload(ctx context.Context, odoo *odoov1alpha1.Odoo) (*ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	var repositoriesToClone = make([]odoov1alpha1.GitRepositorySpec, 0, len(odoo.Spec.Modules.Repositories)+1) // Preallocate for efficiency
+	var requiredSSHSecrets = make([]string, 0, len(odoo.Spec.Modules.Repositories)+1)
 
 	// Add Enterprise repo if enabled
 	if odoo.Spec.Enterprise.Enabled {
@@ -243,7 +283,6 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		if repoURL == "" {
 			repoURL = "git@github.com:odoo/enterprise.git"
 		}
-
 		repositoriesToClone = append(repositoriesToClone, odoov1alpha1.GitRepositorySpec{
 			Name:            "enterprise",
 			URL:             repoURL,
@@ -263,28 +302,26 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 	}
 
-	// If there are repositories to clone, manage the download job
 	if len(repositoriesToClone) > 0 {
-		// Verify all required SSH secrets exist
 		for _, secretNameIter := range requiredSSHSecrets {
 			sshSecret := &corev1.Secret{}
-			err = r.Get(ctx, types.NamespacedName{Name: secretNameIter, Namespace: odoo.Namespace}, sshSecret)
+			err := r.Get(ctx, types.NamespacedName{Name: secretNameIter, Namespace: odoo.Namespace}, sshSecret)
 			if err != nil {
 				log.Error(err, "Failed to get SSH Key Secret for custom repository", "Secret.Name", secretNameIter)
-				return ctrl.Result{}, err
+				return &ctrl.Result{}, err
 			}
 		}
 
 		addonsJobName := odoo.Name + "-addons-download-job"
 		addonsJob := &batchv1.Job{}
-		err = r.Get(ctx, types.NamespacedName{Name: addonsJobName, Namespace: odoo.Namespace}, addonsJob)
+		err := r.Get(ctx, types.NamespacedName{Name: addonsJobName, Namespace: odoo.Namespace}, addonsJob)
 
 		if err != nil && errors.IsNotFound(err) {
 			job := r.jobForAddonsDownload(odoo, repositoriesToClone, requiredSSHSecrets)
 			log.Info("Creating Addons Download Job", "Job.Namespace", job.Namespace, "Job.Name", job.Name)
 			if err := r.Create(ctx, job); err != nil {
 				log.Error(err, "Failed to create Addons Download Job")
-				return ctrl.Result{}, err
+				return &ctrl.Result{}, err
 			}
 			r.setOdooCondition(&odoo.Status, metav1.Condition{
 				Type:    "Available",
@@ -295,10 +332,10 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			if err := r.Status().Update(ctx, odoo); err != nil {
 				log.Error(err, "Failed to update status for Addons Init")
 			}
-			return ctrl.Result{Requeue: true}, nil
+			return &ctrl.Result{Requeue: true}, nil
 		} else if err != nil {
 			log.Error(err, "Failed to get Addons Download Job")
-			return ctrl.Result{}, err
+			return &ctrl.Result{}, err
 		}
 
 		if addonsJob.Status.Succeeded == 0 {
@@ -313,49 +350,52 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 				if err := r.Status().Update(ctx, odoo); err != nil {
 					log.Error(err, "Failed to update status for Addons failure")
 				}
-				return ctrl.Result{}, fmt.Errorf("addons download job failed")
+				return &ctrl.Result{}, fmt.Errorf("addons download job failed")
 			}
 			log.Info("Addons Download Job is still running", "Job.Name", addonsJobName)
-			return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+			return &ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 		}
-		// Job succeeded, proceed.
 		log.Info("Addons Download Job completed successfully")
 	}
+	return nil, nil
+}
 
-	// Create the ConfigMap if it doesn't exist
+// reconcileConfigMap manages the creation and update of the Odoo ConfigMap.
+func (r *OdooReconciler) reconcileConfigMap(ctx context.Context, odoo *odoov1alpha1.Odoo, dbHost string) (*ctrl.Result, error) {
+	log := logf.FromContext(ctx)
 	cm := &corev1.ConfigMap{}
-	err = r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-config", Namespace: odoo.Namespace}, cm)
+	err := r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-config", Namespace: odoo.Namespace}, cm)
 	if err != nil && errors.IsNotFound(err) {
 		dep := r.configMapForOdoo(odoo, dbHost)
 		log.Info("Creating a new ConfigMap", "ConfigMap.Namespace", dep.Namespace, "ConfigMap.Name", dep.Name)
 		err = r.Create(ctx, dep)
 		if err != nil {
 			log.Error(err, "Failed to create new ConfigMap", "ConfigMap.Namespace", dep.Namespace, "ConfigMap.Name", dep.Name)
-			return ctrl.Result{}, err
+			return &ctrl.Result{}, err
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return &ctrl.Result{Requeue: true}, nil
 	} else if err != nil {
 		log.Error(err, "Failed to get ConfigMap")
-		return ctrl.Result{}, err
+		return &ctrl.Result{}, err
 	}
+	return nil, nil
+}
 
-	// --- ODOO INITIALIZATION JOB ---
-	// Before creating the Odoo StatefulSet, ensure the database is initialized.
+// reconcileInitJob manages the database initialization Job.
+func (r *OdooReconciler) reconcileInitJob(ctx context.Context, odoo *odoov1alpha1.Odoo, dbHost, secretName string) (*ctrl.Result, error) {
+	log := logf.FromContext(ctx)
 	initJob := &batchv1.Job{}
 	jobName := odoo.Name + "-db-init"
-	err = r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: odoo.Namespace}, initJob)
+	err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: odoo.Namespace}, initJob)
 
 	if err != nil && errors.IsNotFound(err) {
-		// The Job doesn't exist, and the StatefulSet probably doesn't either.
-		// Let's create the Job.
 		job := r.jobForOdooInit(odoo, dbHost, secretName)
 		log.Info("Creating a new DB initialization Job", "Job.Namespace", job.Namespace, "Job.Name", job.Name)
 		if err := r.Create(ctx, job); err != nil {
 			log.Error(err, "Failed to create new Job")
-			return ctrl.Result{}, err
+			return &ctrl.Result{}, err
 		}
 
-		// Update status to reflect Job creation
 		log.Info("Updating Odoo status to DBInitializing")
 		odoo.Status.ReadyReplicas = 0
 		odoo.Status.Replicas = odoo.Spec.Size
@@ -368,24 +408,20 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		})
 		if err := r.Status().Update(ctx, odoo); err != nil {
 			log.Error(err, "Failed to update Odoo status for DB init job creation")
-			return ctrl.Result{}, err
+			return &ctrl.Result{}, err
 		}
 
 		log.Info("DB initialization Job created, requeuing.")
-		return ctrl.Result{Requeue: true}, nil
+		return &ctrl.Result{Requeue: true}, nil
 
 	} else if err != nil {
 		log.Error(err, "Failed to get DB initialization Job")
-		return ctrl.Result{}, err
+		return &ctrl.Result{}, err
 	}
 
-	// If we get here, the Job exists. Let's check its status.
 	if initJob.Status.Succeeded == 0 {
 		if initJob.Status.Failed > 0 {
-			// Job has failed. Report the error and stop reconciliation.
 			log.Error(fmt.Errorf("DB initialization Job failed"), "Job details", "Job.Name", initJob.Name)
-
-			// Update status to reflect Job failure
 			log.Info("Updating Odoo status to DBInitFailed")
 			r.setOdooCondition(&odoo.Status, metav1.Condition{
 				Type:    "Available",
@@ -396,13 +432,9 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			if err := r.Status().Update(ctx, odoo); err != nil {
 				log.Error(err, "Failed to update Odoo status for failed DB init job")
 			}
-
-			return ctrl.Result{}, fmt.Errorf("DB initialization Job %s failed", initJob.Name)
+			return &ctrl.Result{}, fmt.Errorf("DB initialization Job %s failed", initJob.Name)
 		}
-		// Job is still running. Log it and requeue.
 		log.Info("DB initialization Job is still running", "Job.Name", initJob.Name)
-
-		// Update status to reflect running Job
 		log.Info("Updating Odoo status to DBInitializing (job running)")
 		odoo.Status.ReadyReplicas = 0
 		odoo.Status.Replicas = odoo.Spec.Size
@@ -415,31 +447,29 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		})
 		if err := r.Status().Update(ctx, odoo); err != nil {
 			log.Error(err, "Failed to update Odoo status for running DB init job")
-			return ctrl.Result{}, err
+			return &ctrl.Result{}, err
 		}
-
-		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil // Check back in 15 seconds
+		return &ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
-	// If we get here, the Job has completed successfully.
 	log.Info("DB initialization Job completed successfully.", "Job.Name", initJob.Name)
+	return nil, nil
+}
 
-	// --- ODOO UPGRADE ---
-	// Check if we need to run an upgrade (migration)
+// reconcileUpgrade manages Odoo version upgrades.
+func (r *OdooReconciler) reconcileUpgrade(ctx context.Context, odoo *odoov1alpha1.Odoo, dbHost, secretName string) (*ctrl.Result, error) {
+	log := logf.FromContext(ctx)
 	currentVersion := odoo.Status.CurrentVersion
 	targetVersion := odoo.Spec.Version
 	if targetVersion == "" {
-		targetVersion = "19" // default
+		targetVersion = "19"
 	}
 
-	// First installation case: if CurrentVersion is empty, we assume the DB init job
-	// installed the target version. We just update the status.
 	if currentVersion == "" {
 		if odoo.Status.CurrentVersion != targetVersion {
 			log.Info("First installation detected, setting CurrentVersion", "Version", targetVersion)
 			odoo.Status.CurrentVersion = targetVersion
 
-			// Calculate and set initial ModulesHash to avoid immediate update trigger
 			initialHash, err := computeModulesHash(odoo.Spec.Modules)
 			if err == nil {
 				odoo.Status.ModulesHash = initialHash
@@ -449,28 +479,23 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 			if err := r.Status().Update(ctx, odoo); err != nil {
 				log.Error(err, "Failed to update Odoo status (CurrentVersion)")
-				return ctrl.Result{}, err
+				return &ctrl.Result{}, err
 			}
 		}
 	} else if currentVersion != targetVersion && odoo.Spec.Upgrade.Enabled {
-		// Version mismatch and upgrade enabled -> trigger upgrade job
-
-		// Determine job name
 		safeVersion := strings.ReplaceAll(targetVersion, ".", "-")
 		upgradeJobName := fmt.Sprintf("%s-upgrade-%s", odoo.Name, safeVersion)
 		upgradeJob := &batchv1.Job{}
-		err = r.Get(ctx, types.NamespacedName{Name: upgradeJobName, Namespace: odoo.Namespace}, upgradeJob)
+		err := r.Get(ctx, types.NamespacedName{Name: upgradeJobName, Namespace: odoo.Namespace}, upgradeJob)
 
 		if err != nil && errors.IsNotFound(err) {
-			// Job doesn't exist, create it
 			job := r.jobForOdooUpgrade(odoo, dbHost, secretName)
 			log.Info("Creating a new Upgrade Job", "Job.Namespace", job.Namespace, "Job.Name", job.Name)
 			if err := r.Create(ctx, job); err != nil {
 				log.Error(err, "Failed to create Upgrade Job")
-				return ctrl.Result{}, err
+				return &ctrl.Result{}, err
 			}
 
-			// Update status
 			log.Info("Updating Odoo status to Upgrading")
 			r.setOdooCondition(&odoo.Status, metav1.Condition{
 				Type:    "Available",
@@ -484,19 +509,17 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			}
 			if err := r.Status().Update(ctx, odoo); err != nil {
 				log.Error(err, "Failed to update Odoo status for upgrade start")
-				return ctrl.Result{}, err
+				return &ctrl.Result{}, err
 			}
-			return ctrl.Result{Requeue: true}, nil
+			return &ctrl.Result{Requeue: true}, nil
 
 		} else if err != nil {
 			log.Error(err, "Failed to get Upgrade Job")
-			return ctrl.Result{}, err
+			return &ctrl.Result{}, err
 		}
 
-		// Job exists, check status
 		if upgradeJob.Status.Succeeded == 0 {
 			if upgradeJob.Status.Failed > 0 {
-				// Failed
 				log.Error(fmt.Errorf("Upgrade Job failed"), "Job.Name", upgradeJobName)
 				r.setOdooCondition(&odoo.Status, metav1.Condition{
 					Type:    "Available",
@@ -508,14 +531,12 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 				if err := r.Status().Update(ctx, odoo); err != nil {
 					log.Error(err, "Failed to update Odoo status for upgrade failure")
 				}
-				return ctrl.Result{}, fmt.Errorf("upgrade job failed")
+				return &ctrl.Result{}, fmt.Errorf("upgrade job failed")
 			}
-			// Running
 			log.Info("Upgrade Job is still running", "Job.Name", upgradeJobName)
-			return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+			return &ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 		}
 
-		// Succeeded
 		log.Info("Upgrade Job completed successfully", "Job.Name", upgradeJobName)
 		odoo.Status.CurrentVersion = targetVersion
 		odoo.Status.Migration.Phase = "Succeeded"
@@ -524,39 +545,37 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 		if err := r.Status().Update(ctx, odoo); err != nil {
 			log.Error(err, "Failed to update Odoo status after upgrade success")
-			return ctrl.Result{}, err
+			return &ctrl.Result{}, err
 		}
-		// Continue to update StatefulSet...
 	}
+	return nil, nil
+}
 
-	// --- MODULES UPDATE ---
-	// Check if modules configuration has changed
+// reconcileModulesUpdate triggers an Odoo module update job if the module configuration has changed.
+func (r *OdooReconciler) reconcileModulesUpdate(ctx context.Context, odoo *odoov1alpha1.Odoo, dbHost, secretName string) (*ctrl.Result, error) {
+	log := logf.FromContext(ctx)
 	currentModulesHash := odoo.Status.ModulesHash
 	targetModulesHash, err := computeModulesHash(odoo.Spec.Modules)
 	if err != nil {
 		log.Error(err, "Failed to compute modules hash")
-		return ctrl.Result{}, err
+		return &ctrl.Result{}, err
 	}
 
 	if currentModulesHash != targetModulesHash {
-		// Modules config changed -> trigger update job
-		// We use a simplified name for the job based on hash prefix to avoid length issues
 		modulesUpdateJobName := fmt.Sprintf("%s-update-modules-%s", odoo.Name, targetModulesHash[:8])
 		modulesUpdateJob := &batchv1.Job{}
 		err = r.Get(ctx, types.NamespacedName{Name: modulesUpdateJobName, Namespace: odoo.Namespace}, modulesUpdateJob)
 
 		if err != nil && errors.IsNotFound(err) {
-			// Job doesn't exist, create it
 			job := r.jobForOdooUpgrade(odoo, dbHost, secretName)
-			job.Name = modulesUpdateJobName // Override name
+			job.Name = modulesUpdateJobName
 
 			log.Info("Creating a new Modules Update Job", "Job.Namespace", job.Namespace, "Job.Name", job.Name)
 			if err := r.Create(ctx, job); err != nil {
 				log.Error(err, "Failed to create Modules Update Job")
-				return ctrl.Result{}, err
+				return &ctrl.Result{}, err
 			}
 
-			// Update status
 			log.Info("Updating Odoo status to UpdatingModules")
 			r.setOdooCondition(&odoo.Status, metav1.Condition{
 				Type:    "Available",
@@ -566,16 +585,15 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			})
 			if err := r.Status().Update(ctx, odoo); err != nil {
 				log.Error(err, "Failed to update Odoo status for modules update start")
-				return ctrl.Result{}, err
+				return &ctrl.Result{}, err
 			}
-			return ctrl.Result{Requeue: true}, nil
+			return &ctrl.Result{Requeue: true}, nil
 
 		} else if err != nil {
 			log.Error(err, "Failed to get Modules Update Job")
-			return ctrl.Result{}, err
+			return &ctrl.Result{}, err
 		}
 
-		// Job exists, check status
 		if modulesUpdateJob.Status.Succeeded == 0 {
 			if modulesUpdateJob.Status.Failed > 0 {
 				log.Error(fmt.Errorf("Modules Update Job failed"), "Job.Name", modulesUpdateJobName)
@@ -588,27 +606,28 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 				if err := r.Status().Update(ctx, odoo); err != nil {
 					log.Error(err, "Failed to update Odoo status for modules update failure")
 				}
-				return ctrl.Result{}, fmt.Errorf("modules update job failed")
+				return &ctrl.Result{}, fmt.Errorf("modules update job failed")
 			}
 			log.Info("Modules Update Job is still running", "Job.Name", modulesUpdateJobName)
-			return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+			return &ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 		}
 
-		// Succeeded
 		log.Info("Modules Update Job completed successfully", "Job.Name", modulesUpdateJobName)
 		odoo.Status.ModulesHash = targetModulesHash
 		if err := r.Status().Update(ctx, odoo); err != nil {
 			log.Error(err, "Failed to update Odoo status after modules update success")
-			return ctrl.Result{}, err
+			return &ctrl.Result{}, err
 		}
 	}
+	return nil, nil
+}
 
-	// Check if the statefulset already exists before setting the status to "Creating".
-	// This prevents status flapping on subsequent reconciliations.
+// reconcileStatefulSet manages the creation and updates of the Odoo StatefulSet.
+func (r *OdooReconciler) reconcileStatefulSet(ctx context.Context, odoo *odoov1alpha1.Odoo, dbHost, secretName string) (*ctrl.Result, error) {
+	log := logf.FromContext(ctx)
 	foundSts := &appsv1.StatefulSet{}
-	err = r.Get(ctx, types.NamespacedName{Name: odoo.Name, Namespace: odoo.Namespace}, foundSts)
+	err := r.Get(ctx, types.NamespacedName{Name: odoo.Name, Namespace: odoo.Namespace}, foundSts)
 	if err != nil && errors.IsNotFound(err) {
-		// Update status to reflect that the main application is now being created
 		log.Info("Updating Odoo status to Creating")
 		odoo.Status.ReadyReplicas = 0
 		odoo.Status.Replicas = odoo.Spec.Size
@@ -621,50 +640,42 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		})
 		if err := r.Status().Update(ctx, odoo); err != nil {
 			log.Error(err, "Failed to update Odoo status after DB init job success")
-			return ctrl.Result{}, err
+			return &ctrl.Result{}, err
 		}
 	} else if err != nil {
 		log.Error(err, "Failed to check for existing StatefulSet before status update")
-		return ctrl.Result{}, err
+		return &ctrl.Result{}, err
 	}
 
-	// Check if the statefulset already exists, if not create a new one
 	found := &appsv1.StatefulSet{}
 	err = r.Get(ctx, types.NamespacedName{Name: odoo.Name, Namespace: odoo.Namespace}, found)
 	if err != nil && errors.IsNotFound(err) {
-		// Define a new statefulset
 		dep := r.statefulSetForOdoo(odoo, dbHost, secretName)
 		log.Info("Creating a new StatefulSet", "StatefulSet.Namespace", dep.Namespace, "StatefulSet.Name", dep.Name)
 		err = r.Create(ctx, dep)
 		if err != nil {
 			log.Error(err, "Failed to create new StatefulSet", "StatefulSet.Namespace", dep.Namespace, "StatefulSet.Name", dep.Name)
-			return ctrl.Result{}, err
+			return &ctrl.Result{}, err
 		}
-		// StatefulSet created successfully - return and requeue
-		return ctrl.Result{Requeue: true}, nil
+		return &ctrl.Result{Requeue: true}, nil
 	} else if err != nil {
 		log.Error(err, "Failed to get StatefulSet")
-		return ctrl.Result{}, err
+		return &ctrl.Result{}, err
 	}
 
-	// Ensure the statefulset size is the same as the spec
 	size := odoo.Spec.Size
 	if *found.Spec.Replicas != size {
 		found.Spec.Replicas = &size
 		err = r.Update(ctx, found)
 		if err != nil {
 			log.Error(err, "Failed to update StatefulSet", "StatefulSet.Namespace", found.Namespace, "StatefulSet.Name", found.Name)
-			return ctrl.Result{}, err
+			return &ctrl.Result{}, err
 		}
-		// Ask to requeue after 1 minute in order to give enough time for the
-		// pods be created on the cluster side and the operand be able
-		// to do the next update step accurately.
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		return &ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
 
-	// Ensure the statefulset image matches the spec
-	// Regenerate the desired statefulset to get the expected image
 	desiredSts := r.statefulSetForOdoo(odoo, dbHost, secretName)
+	// Update image if needed
 	if len(found.Spec.Template.Spec.Containers) > 0 && len(desiredSts.Spec.Template.Spec.Containers) > 0 {
 		desiredImage := desiredSts.Spec.Template.Spec.Containers[0].Image
 		currentImage := found.Spec.Template.Spec.Containers[0].Image
@@ -675,16 +686,31 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			err = r.Update(ctx, found)
 			if err != nil {
 				log.Error(err, "Failed to update StatefulSet image")
-				return ctrl.Result{}, err
+				return &ctrl.Result{}, err
 			}
-			return ctrl.Result{Requeue: true}, nil
+			return &ctrl.Result{Requeue: true}, nil
 		}
 	}
 
-	// Determine if log volume is enabled (default is true)
-	logVolumeEnabled := odoo.Spec.Logs.VolumeEnabled == nil || *odoo.Spec.Logs.VolumeEnabled
+	// Update annotations (e.g. hash changes)
+	if found.Spec.Template.Annotations == nil {
+		found.Spec.Template.Annotations = make(map[string]string)
+	}
+	desiredHash := desiredSts.Spec.Template.Annotations["odoo.cloud.alterway.fr/modules-hash"]
+	currentHash := found.Spec.Template.Annotations["odoo.cloud.alterway.fr/modules-hash"]
+	if currentHash != desiredHash {
+		log.Info("Updating StatefulSet modules hash annotation", "Current", currentHash, "Desired", desiredHash)
+		found.Spec.Template.Annotations["odoo.cloud.alterway.fr/modules-hash"] = desiredHash
+		err = r.Update(ctx, found)
+		if err != nil {
+			log.Error(err, "Failed to update StatefulSet hash")
+			return &ctrl.Result{}, err
+		}
+		return &ctrl.Result{Requeue: true}, nil
+	}
 
-	// Create/Delete the log PVC based on the spec
+	// Log PVC logic
+	logVolumeEnabled := odoo.Spec.Logs.VolumeEnabled == nil || *odoo.Spec.Logs.VolumeEnabled
 	logPvc := &corev1.PersistentVolumeClaim{}
 	err = r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-logs-pvc", Namespace: odoo.Namespace}, logPvc)
 	if err != nil && errors.IsNotFound(err) {
@@ -693,142 +719,142 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			log.Info("Creating a new PVC for logs", "PVC.Namespace", pvc.Namespace, "PVC.Name", pvc.Name)
 			if err := r.Create(ctx, pvc); err != nil {
 				log.Error(err, "Failed to create log PVC")
-				return ctrl.Result{}, err
+				return &ctrl.Result{}, err
 			}
-			return ctrl.Result{Requeue: true}, nil
+			return &ctrl.Result{Requeue: true}, nil
 		}
 	} else if err != nil {
 		log.Error(err, "Failed to get log PVC")
-		return ctrl.Result{}, err
+		return &ctrl.Result{}, err
 	} else if !logVolumeEnabled {
 		log.Info("Deleting log PVC as it is disabled", "PVC.Namespace", logPvc.Namespace, "PVC.Name", logPvc.Name)
 		if err := r.Delete(ctx, logPvc); err != nil {
 			log.Error(err, "Failed to delete log PVC")
-			return ctrl.Result{}, err
+			return &ctrl.Result{}, err
 		}
 	}
+	return nil, nil
+}
 
-	// Create the Services if they don't exist
+// reconcileServices manages the creation and updates of Odoo Services.
+func (r *OdooReconciler) reconcileServices(ctx context.Context, odoo *odoov1alpha1.Odoo) (*ctrl.Result, error) {
+	log := logf.FromContext(ctx)
 	services := []string{"service", "headless"}
 	for _, serviceName := range services {
 		svc := &corev1.Service{}
-		err = r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-" + serviceName, Namespace: odoo.Namespace}, svc)
+		err := r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-" + serviceName, Namespace: odoo.Namespace}, svc)
 		if err != nil && errors.IsNotFound(err) {
 			dep := r.serviceForOdoo(odoo, serviceName)
 			log.Info("Creating a new Service", "Service.Namespace", dep.Namespace, "Service.Name", dep.Name)
 			err = r.Create(ctx, dep)
 			if err != nil {
 				log.Error(err, "Failed to create new Service", "Service.Namespace", dep.Namespace, "Service.Name", dep.Name)
-				return ctrl.Result{}, err
+				return &ctrl.Result{}, err
 			}
-			return ctrl.Result{Requeue: true}, nil
+			return &ctrl.Result{Requeue: true}, nil
 		} else if err != nil {
 			log.Error(err, "Failed to get Service")
-			return ctrl.Result{}, err
+			return &ctrl.Result{}, err
 		}
 	}
+	return nil, nil
+}
 
-	// Reconcile the Ingress
+// reconcileIngress manages the creation and updates of the Odoo Ingress.
+func (r *OdooReconciler) reconcileIngress(ctx context.Context, odoo *odoov1alpha1.Odoo) (*ctrl.Result, error) {
+	log := logf.FromContext(ctx)
 	ingress := &networkingv1.Ingress{}
-	err = r.Get(ctx, types.NamespacedName{Name: odoo.Name, Namespace: odoo.Namespace}, ingress)
+	err := r.Get(ctx, types.NamespacedName{Name: odoo.Name, Namespace: odoo.Namespace}, ingress)
 	if err != nil && errors.IsNotFound(err) {
-		// Create Ingress if enabled in spec
 		if odoo.Spec.Ingress.Enabled {
 			ing := r.ingressForOdoo(odoo)
 			log.Info("Creating a new Ingress", "Ingress.Namespace", ing.Namespace, "Ingress.Name", ing.Name)
 			if err := r.Create(ctx, ing); err != nil {
 				log.Error(err, "Failed to create new Ingress")
-				return ctrl.Result{}, err
+				return &ctrl.Result{}, err
 			}
-			return ctrl.Result{Requeue: true}, nil
+			return &ctrl.Result{Requeue: true}, nil
 		}
 	} else if err != nil {
 		log.Error(err, "Failed to get Ingress")
-		return ctrl.Result{}, err
+		return &ctrl.Result{}, err
 	} else if !odoo.Spec.Ingress.Enabled {
-		// Delete Ingress if not enabled in spec
 		log.Info("Deleting Ingress", "Ingress.Namespace", ingress.Namespace, "Ingress.Name", ingress.Name)
 		if err := r.Delete(ctx, ingress); err != nil {
 			log.Error(err, "Failed to delete Ingress")
-			return ctrl.Result{}, err
+			return &ctrl.Result{}, err
+		}
+	}
+	return nil, nil
+}
+
+// updateStatus updates the status subresource of the Odoo CR based on the current state of its dependencies.
+func (r *OdooReconciler) updateStatus(ctx context.Context, req ctrl.Request) {
+	log := logf.FromContext(ctx)
+	latestOdoo := &odoov1alpha1.Odoo{}
+	if err := r.Get(ctx, req.NamespacedName, latestOdoo); err != nil {
+		log.Error(err, "Failed to get latest Odoo for status update")
+		return
+	}
+
+	odooSts := &appsv1.StatefulSet{}
+	err := r.Get(ctx, types.NamespacedName{Name: latestOdoo.Name, Namespace: latestOdoo.Namespace}, odooSts)
+
+	status := &latestOdoo.Status
+	status.Replicas = latestOdoo.Spec.Size
+
+	if err != nil {
+		if errors.IsNotFound(err) {
+			status.ReadyReplicas = 0
+			status.Ready = fmt.Sprintf("0/%d", status.Replicas)
+			r.setOdooCondition(status, metav1.Condition{
+				Type:    "Available",
+				Status:  metav1.ConditionFalse,
+				Reason:  "Creating",
+				Message: "Dependencies are being created.",
+			})
+		} else {
+			status.Ready = "Unknown"
+			r.setOdooCondition(status, metav1.Condition{
+				Type:    "Available",
+				Status:  metav1.ConditionUnknown,
+				Reason:  "Error",
+				Message: "Failed to get StatefulSet status.",
+			})
+		}
+	} else {
+		status.ReadyReplicas = odooSts.Status.ReadyReplicas
+		status.Ready = fmt.Sprintf("%d/%d", status.ReadyReplicas, status.Replicas)
+
+		reason := "Initializing"
+		if odooSts.Status.ObservedGeneration < odooSts.Generation {
+			reason = "Updating"
+		} else if odooSts.Status.Replicas > status.Replicas {
+			reason = "ScalingDown"
+		} else if odooSts.Status.Replicas < status.Replicas {
+			reason = "ScalingUp"
+		}
+
+		if status.ReadyReplicas < status.Replicas {
+			r.setOdooCondition(status, metav1.Condition{
+				Type:    "Available",
+				Status:  metav1.ConditionFalse,
+				Reason:  reason,
+				Message: fmt.Sprintf("Waiting for pods: %s.", status.Ready),
+			})
+		} else {
+			r.setOdooCondition(status, metav1.Condition{
+				Type:    "Available",
+				Status:  metav1.ConditionTrue,
+				Reason:  "Ready",
+				Message: "All Odoo pods are ready.",
+			})
 		}
 	}
 
-	// --- STATUS UPDATE ---
-	// At the end of the reconciliation, update the status to reflect the real state of the world.
-	defer func() {
-		// This defer block ensures that the status is updated even if there's an error earlier.
-		// We need to fetch the latest version of the object to avoid race conditions.
-		latestOdoo := &odoov1alpha1.Odoo{}
-		if err := r.Get(ctx, req.NamespacedName, latestOdoo); err != nil {
-			log.Error(err, "Failed to get latest Odoo for status update")
-			return
-		}
-
-		// Check the status of the Odoo StatefulSet
-		odooSts := &appsv1.StatefulSet{}
-		err = r.Get(ctx, types.NamespacedName{Name: latestOdoo.Name, Namespace: latestOdoo.Namespace}, odooSts)
-
-		status := &latestOdoo.Status
-		status.Replicas = latestOdoo.Spec.Size
-
-		if err != nil {
-			if errors.IsNotFound(err) {
-				status.ReadyReplicas = 0
-				status.Ready = fmt.Sprintf("0/%d", status.Replicas)
-				r.setOdooCondition(status, metav1.Condition{
-					Type:    "Available",
-					Status:  metav1.ConditionFalse,
-					Reason:  "Creating",
-					Message: "Dependencies are being created.",
-				})
-			} else {
-				status.Ready = "Unknown"
-				r.setOdooCondition(status, metav1.Condition{
-					Type:    "Available",
-					Status:  metav1.ConditionUnknown,
-					Reason:  "Error",
-					Message: "Failed to get StatefulSet status.",
-				})
-			}
-		} else {
-			status.ReadyReplicas = odooSts.Status.ReadyReplicas
-			status.Ready = fmt.Sprintf("%d/%d", status.ReadyReplicas, status.Replicas)
-
-			// Determine the reason for the condition
-			reason := "Initializing"
-			// A generation change means a spec update is in progress.
-			if odooSts.Status.ObservedGeneration < odooSts.Generation {
-				reason = "Updating"
-			} else if odooSts.Status.Replicas > status.Replicas {
-				reason = "ScalingDown"
-			} else if odooSts.Status.Replicas < status.Replicas {
-				reason = "ScalingUp"
-			}
-
-			if status.ReadyReplicas < status.Replicas {
-				r.setOdooCondition(status, metav1.Condition{
-					Type:    "Available",
-					Status:  metav1.ConditionFalse,
-					Reason:  reason,
-					Message: fmt.Sprintf("Waiting for pods: %s.", status.Ready),
-				})
-			} else {
-				r.setOdooCondition(status, metav1.Condition{
-					Type:    "Available",
-					Status:  metav1.ConditionTrue,
-					Reason:  "Ready",
-					Message: "All Odoo pods are ready.",
-				})
-			}
-		}
-
-		if err := r.Status().Update(ctx, latestOdoo); err != nil {
-			log.Error(err, "Failed to update Odoo status")
-		}
-	}()
-
-	return ctrl.Result{}, nil
+	if err := r.Status().Update(ctx, latestOdoo); err != nil {
+		log.Error(err, "Failed to update Odoo status")
+	}
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -844,6 +870,7 @@ func (r *OdooReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+// statefulSetForOdoo returns an Odoo StatefulSet object.
 func (r *OdooReconciler) statefulSetForOdoo(odoo *odoov1alpha1.Odoo, dbHost, secretName string) *appsv1.StatefulSet {
 	ls := labelsForOdoo(odoo.Name)
 	replicas := odoo.Spec.Size
@@ -852,12 +879,6 @@ func (r *OdooReconciler) statefulSetForOdoo(odoo *odoov1alpha1.Odoo, dbHost, sec
 		odooVersion = "19" // Default version
 	}
 	odooImage := fmt.Sprintf("odoo:%s", odooVersion)
-
-	// Define environment variables from secret
-	envFromSecret := []corev1.EnvVar{
-		{Name: "POSTGRES_USER", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "user"}}},
-		{Name: "POSTGRES_PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "password"}}},
-	}
 
 	dep := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -879,7 +900,8 @@ func (r *OdooReconciler) statefulSetForOdoo(odoo *odoov1alpha1.Odoo, dbHost, sec
 					},
 				},
 				Spec: corev1.PodSpec{
-					SecurityContext: &corev1.PodSecurityContext{RunAsUser: func() *int64 { i := int64(0); return &i }(),
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsUser:  func() *int64 { i := int64(0); return &i }(),
 						RunAsGroup: func() *int64 { i := int64(0); return &i }(),
 						FSGroup:    func() *int64 { i := int64(0); return &i }(),
 					},
@@ -904,7 +926,11 @@ func (r *OdooReconciler) statefulSetForOdoo(odoo *odoov1alpha1.Odoo, dbHost, sec
 							{ContainerPort: 8072, Name: "longpolling"},
 						},
 						Resources: odoo.Spec.Resources.Odoo,
-						Env:       append([]corev1.EnvVar{{Name: "HOST", Value: dbHost}}, envFromSecret...),
+						Env: []corev1.EnvVar{
+							{Name: "HOST", Value: dbHost},
+							{Name: "POSTGRES_USER", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "user"}}},
+							{Name: "POSTGRES_PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "password"}}},
+						},
 						VolumeMounts: []corev1.VolumeMount{
 							{Name: "odoo-data", MountPath: "/var/lib/odoo"},
 							{Name: "odoo-config", MountPath: "/etc/odoo/odoo.conf", SubPath: "odoo.conf"},
@@ -945,6 +971,7 @@ func (r *OdooReconciler) statefulSetForOdoo(odoo *odoov1alpha1.Odoo, dbHost, sec
 	return dep
 }
 
+// jobForOdooInit returns a Job object for initializing the Odoo database.
 func (r *OdooReconciler) jobForOdooInit(odoo *odoov1alpha1.Odoo, dbHost, secretName string) *batchv1.Job {
 	ls := labelsForOdoo(odoo.Name)
 	odooVersion := odoo.Spec.Version
@@ -1051,12 +1078,12 @@ func (r *OdooReconciler) jobForOdooInit(odoo *odoov1alpha1.Odoo, dbHost, secretN
 	return job
 }
 
+// jobForOdooUpgrade returns a Job object for upgrading Odoo modules.
 func (r *OdooReconciler) jobForOdooUpgrade(odoo *odoov1alpha1.Odoo, dbHost, secretName string) *batchv1.Job {
 	ls := labelsForOdoo(odoo.Name)
 	odooVersion := odoo.Spec.Version
-	// We use the NEW version for the upgrade job
 	if odooVersion == "" {
-		odooVersion = "19"
+		odooVersion = "19" // Default version
 	}
 	odooImage := fmt.Sprintf("odoo:%s", odooVersion)
 
@@ -1276,7 +1303,7 @@ fi
 						{
 							Name:         "git-clone",
 							Image:        "alpine/git", // A lightweight image with git
-							Command:      []string{"/bin/sh", "-c", scriptBuilder.String()},
+							Command:      []string{"sh", "-c", scriptBuilder.String()},
 							VolumeMounts: volumeMounts,
 							// Reuse init resources for addons download job
 							Resources: odoo.Spec.Resources.Init,
@@ -1332,7 +1359,7 @@ func (r *OdooReconciler) configMapForOdoo(odoo *odoov1alpha1.Odoo, dbHost string
 	}
 
 	// Dynamically build addons_path
-	var addonsPathParts []string
+	var addonsPathParts = make([]string, 0, 5) // Preallocate with estimated size to satisfy linter
 	addonsPathParts = append(addonsPathParts, "/usr/lib/python3/dist-packages/")
 
 	// Add Enterprise path if enabled
@@ -1418,96 +1445,6 @@ func (r *OdooReconciler) pvcForOdoo(odoo *odoov1alpha1.Odoo, name string) *corev
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      odoo.Name + "-" + name + "-pvc",
-			Namespace: odoo.Namespace,
-			Labels:    ls,
-		},
-		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes: []corev1.PersistentVolumeAccessMode{storageSpec.AccessMode},
-			Resources: corev1.VolumeResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceStorage: resource.MustParse(storageSpec.Size),
-				},
-			},
-		},
-	}
-
-	if storageSpec.StorageClassName != "" {
-		pvc.Spec.StorageClassName = &storageSpec.StorageClassName
-	}
-
-	ctrl.SetControllerReference(odoo, pvc, r.Scheme)
-	return pvc
-}
-
-func (r *OdooReconciler) statefulSetForPostgres(odoo *odoov1alpha1.Odoo, secretName string) *appsv1.StatefulSet {
-	ls := labelsForOdoo(odoo.Name + "-postgres")
-	replicas := int32(1)
-
-	sts := &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      odoo.Name + "-postgres",
-			Namespace: odoo.Namespace,
-			Labels:    ls,
-		},
-		Spec: appsv1.StatefulSetSpec{
-			Replicas: &replicas,
-			Selector: &metav1.LabelSelector{
-				MatchLabels: ls,
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: ls,
-				},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{{
-						Name:  "postgres",
-						Image: "postgres:15",
-						Ports: []corev1.ContainerPort{{
-							ContainerPort: 5432,
-						}},
-						Resources: odoo.Spec.Resources.Postgres,
-						Env: []corev1.EnvVar{
-							{Name: "POSTGRES_USER", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "user"}}},
-							{Name: "POSTGRES_PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "password"}}},
-							{Name: "POSTGRES_DB", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "dbname"}}},
-							{Name: "PGDATA", Value: "/var/lib/postgresql/data/pgdata"},
-						},
-						VolumeMounts: []corev1.VolumeMount{{
-							Name:      "postgres-data",
-							MountPath: "/var/lib/postgresql/data",
-						}},
-					}},
-					Volumes: []corev1.Volume{{
-						Name: "postgres-data",
-						VolumeSource: corev1.VolumeSource{
-							PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-								ClaimName: odoo.Name + "-postgres-pvc",
-							},
-						},
-					}},
-				},
-			},
-		},
-	}
-	ctrl.SetControllerReference(odoo, sts, r.Scheme)
-	return sts
-}
-
-func (r *OdooReconciler) pvcForPostgres(odoo *odoov1alpha1.Odoo) *corev1.PersistentVolumeClaim {
-	ls := labelsForOdoo(odoo.Name + "-postgres")
-	storageSpec := odoo.Spec.Storage.Postgres
-
-	// Apply defaults
-	if storageSpec.Size == "" {
-		storageSpec.Size = "5Gi"
-	}
-	if storageSpec.AccessMode == "" {
-		storageSpec.AccessMode = corev1.ReadWriteOnce
-	}
-
-	pvc := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      odoo.Name + "-postgres-pvc",
 			Namespace: odoo.Namespace,
 			Labels:    ls,
 		},
@@ -1717,6 +1654,99 @@ func (r *OdooReconciler) ingressForOdoo(odoo *odoov1alpha1.Odoo) *networkingv1.I
 	return ing
 }
 
+func (r *OdooReconciler) pvcForPostgres(odoo *odoov1alpha1.Odoo) *corev1.PersistentVolumeClaim {
+	ls := labelsForOdoo(odoo.Name + "-postgres")
+
+	storageSpec := odoo.Spec.Storage.Postgres
+	if storageSpec.Size == "" {
+		storageSpec.Size = "1Gi"
+	}
+	if storageSpec.AccessMode == "" {
+		storageSpec.AccessMode = corev1.ReadWriteOnce
+	}
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      odoo.Name + "-postgres-pvc",
+			Namespace: odoo.Namespace,
+			Labels:    ls,
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{storageSpec.AccessMode},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse(storageSpec.Size),
+				},
+			},
+		},
+	}
+	if storageSpec.StorageClassName != "" {
+		pvc.Spec.StorageClassName = &storageSpec.StorageClassName
+	}
+
+	ctrl.SetControllerReference(odoo, pvc, r.Scheme)
+	return pvc
+}
+
+func (r *OdooReconciler) statefulSetForPostgres(odoo *odoov1alpha1.Odoo, secretName string) *appsv1.StatefulSet {
+	ls := labelsForOdoo(odoo.Name + "-postgres")
+	pgVersion := odoo.Spec.Database.PostgresVersion
+	if pgVersion == "" {
+		pgVersion = "16"
+	}
+	pgImage := fmt.Sprintf("postgres:%s", pgVersion)
+
+	var replicas int32 = 1
+
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      odoo.Name + "-postgres",
+			Namespace: odoo.Namespace,
+			Labels:    ls,
+		},
+		Spec: appsv1.StatefulSetSpec{
+			ServiceName: odoo.Name + "-postgres-svc",
+			Replicas:    &replicas,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: ls,
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: ls,
+				},
+				Spec: corev1.PodSpec{
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsUser:  func() *int64 { i := int64(999); return &i }(),
+						RunAsGroup: func() *int64 { i := int64(999); return &i }(),
+						FSGroup:    func() *int64 { i := int64(999); return &i }(),
+					},
+					Containers: []corev1.Container{{
+						Name:  "postgres",
+						Image: pgImage,
+						Ports: []corev1.ContainerPort{
+							{ContainerPort: 5432, Name: "postgresql"},
+						},
+						Env: []corev1.EnvVar{
+							{Name: "POSTGRES_USER", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "user"}}},
+							{Name: "POSTGRES_PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "password"}}},
+							{Name: "POSTGRES_DB", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "dbname"}}},
+						},
+						Resources: odoo.Spec.Resources.Postgres,
+						VolumeMounts: []corev1.VolumeMount{
+							{Name: "postgres-data", MountPath: "/var/lib/postgresql/data"},
+						},
+					}},
+					Volumes: []corev1.Volume{
+						{Name: "postgres-data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: odoo.Name + "-postgres-pvc"}}},
+					},
+				},
+			},
+		},
+	}
+	ctrl.SetControllerReference(odoo, sts, r.Scheme)
+	return sts
+}
+
 func labelsForOdoo(name string) map[string]string {
 	return map[string]string{"app": "odoo", "odoo_cr": name}
 }
@@ -1742,6 +1772,7 @@ func removeString(slice []string, s string) (result []string) {
 	return
 }
 
+// computeModulesHash generates a SHA256 hash of the Odoo ModulesSpec to detect changes.
 func computeModulesHash(modulesSpec odoov1alpha1.ModulesSpec) (string, error) {
 	bytes, err := json.Marshal(modulesSpec)
 	if err != nil {

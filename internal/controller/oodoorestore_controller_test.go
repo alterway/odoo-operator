@@ -69,13 +69,13 @@ var _ = Describe("OdooRestore Controller", func() {
 			resource := &odoov1alpha1.OdooRestore{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			if err == nil {
-				Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+				_ = k8sClient.Delete(ctx, resource)
 			}
 			// Cleanup job
 			job := &batchv1.Job{}
 			err = k8sClient.Get(ctx, types.NamespacedName{Name: resourceName + "-job", Namespace: "default"}, job)
 			if err == nil {
-				k8sClient.Delete(ctx, job)
+				_ = k8sClient.Delete(ctx, job)
 			}
 		})
 
@@ -120,7 +120,7 @@ var _ = Describe("OdooRestore Controller", func() {
 				if len(updatedRestore.Status.Conditions) == 0 {
 					return false
 				}
-				return updatedRestore.Status.Conditions[len(updatedRestore.Status.Conditions)-1].Type == "Completed"
+				return updatedRestore.Status.Conditions[len(updatedRestore.Status.Conditions)-1].Type == conditionCompleted
 			}, "10s", "1s").Should(BeTrue(), "should update status to Completed")
 		})
 	})

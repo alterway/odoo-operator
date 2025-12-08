@@ -32,6 +32,11 @@ type DatabaseSpec struct {
 	User string `json:"user,omitempty"`
 	// +optional
 	Password string `json:"password,omitempty"`
+
+	// PostgresVersion specifies the desired PostgreSQL version when a managed database is used.
+	// Defaults to "16" if not specified.
+	// +optional
+	PostgresVersion string `json:"postgresVersion,omitempty"`
 }
 
 // OdooSpec defines the desired state of Odoo
