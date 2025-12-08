@@ -58,6 +58,11 @@ spec:
                     type: string
                   password:
                     type: string
+                  postgresVersion:
+                    description: |-
+                      PostgresVersion specifies the desired PostgreSQL version when a managed database is used.
+                      Defaults to "16" if not specified.
+                    type: string
                   user:
                     type: string
                 type: object
@@ -559,6 +564,11 @@ spec:
                     format: date-time
                     type: string
                 type: object
+              modulesHash:
+                description: |-
+                  ModulesHash tracks the hash of the modules configuration (install list + repos).
+                  Used to detect changes and trigger updates.
+                type: string
               ready:
                 description: Ready is a string representation of the ready replicas
                   over the desired replicas, e.g., "1/1".
