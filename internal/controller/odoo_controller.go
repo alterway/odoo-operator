@@ -567,10 +567,13 @@ func (r *OdooReconciler) reconcileModulesUpdate(ctx context.Context, odoo *odoov
 		err = r.Get(ctx, types.NamespacedName{Name: modulesUpdateJobName, Namespace: odoo.Namespace}, modulesUpdateJob)
 
 		if err != nil && errors.IsNotFound(err) {
-			job := r.jobForOdooUpgrade(odoo, dbHost, secretName)
+
+			job := r.jobForModulesUpdate(odoo, dbHost, secretName)
+
 			job.Name = modulesUpdateJobName
 
 			log.Info("Creating a new Modules Update Job", "Job.Namespace", job.Namespace, "Job.Name", job.Name)
+
 			if err := r.Create(ctx, job); err != nil {
 				log.Error(err, "Failed to create Modules Update Job")
 				return &ctrl.Result{}, err
@@ -1186,6 +1189,112 @@ func (r *OdooReconciler) jobForOdooUpgrade(odoo *odoov1alpha1.Odoo, dbHost, secr
 	return job
 }
 
+// jobForModulesUpdate returns a Job object for installing/updating Odoo modules using -i.
+// This ensures that even if modules are present on disk but not installed, they get installed.
+func (r *OdooReconciler) jobForModulesUpdate(odoo *odoov1alpha1.Odoo, dbHost, secretName string) *batchv1.Job {
+	ls := labelsForOdoo(odoo.Name)
+	odooVersion := odoo.Spec.Version
+	if odooVersion == "" {
+		odooVersion = "19" // Default version
+	}
+	odooImage := fmt.Sprintf("odoo:%s", odooVersion)
+
+	// Use install list for modules update
+	modulesToInstall := "base" // Always include base to be safe, or just the list
+	if len(odoo.Spec.Modules.Install) > 0 {
+		modulesToInstall = strings.Join(odoo.Spec.Modules.Install, ",")
+	} else {
+		// If no modules specified, maybe we shouldn't run this job?
+		// But let's default to updating base
+		modulesToInstall = "base"
+	}
+
+	// Generate a deterministic name for the update job is handled by the caller (reconcileModulesUpdate)
+	// creating a unique name based on hash. Here we just need a base name, but caller overrides it.
+	jobName := odoo.Name + "-update-modules"
+
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      jobName,
+			Namespace: odoo.Namespace,
+			Labels:    ls,
+		},
+		Spec: batchv1.JobSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyOnFailure,
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsUser:  func() *int64 { i := int64(0); return &i }(),
+						RunAsGroup: func() *int64 { i := int64(0); return &i }(),
+						FSGroup:    func() *int64 { i := int64(0); return &i }(),
+					},
+					InitContainers: []corev1.Container{
+						{
+							Name:  "wait-for-db",
+							Image: "busybox",
+							Command: []string{"sh", "-c",
+								"until nc -z $DB_HOST $DB_PORT; do echo waiting for db; sleep 2; done;",
+							},
+							Env: []corev1.EnvVar{
+								{Name: "DB_HOST", Value: dbHost},
+								{Name: "DB_PORT", Value: "5432"},
+							},
+						},
+					},
+					Containers: []corev1.Container{
+						{
+							Name:  "odoo-upgrade",
+							Image: odooImage,
+							Command: []string{"sh", "-c",
+								fmt.Sprintf("odoo -c /etc/odoo/odoo.conf -d $POSTGRES_DB -i %s --stop-after-init -w $POSTGRES_PASSWORD -r $POSTGRES_USER", modulesToInstall),
+							},
+							Resources: odoo.Spec.Resources.Init, // Reuse init resources
+							Env: []corev1.EnvVar{
+								{Name: "HOST", Value: dbHost},
+								{Name: "POSTGRES_USER", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "user"}}},
+								{Name: "POSTGRES_PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "password"}}},
+								{Name: "POSTGRES_DB", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "dbname"}}},
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{Name: "odoo-data", MountPath: "/var/lib/odoo"},
+								{Name: "odoo-config", MountPath: "/etc/odoo/odoo.conf", SubPath: "odoo.conf"},
+								{Name: "odoo-addons-all", MountPath: "/mnt/extra-addons"},
+							},
+						},
+					},
+					Volumes: []corev1.Volume{
+						{Name: "odoo-config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: odoo.Name + "-config"}}}},
+						{Name: "odoo-data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: odoo.Name + "-data-pvc"}}},
+						{Name: "odoo-addons-all", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: odoo.Name + "-addons-pvc"}}},
+					},
+				},
+			},
+		},
+	}
+	// Conditionally add log volume mount if enabled
+	logVolumeEnabled := odoo.Spec.Logs.VolumeEnabled == nil || *odoo.Spec.Logs.VolumeEnabled
+	if logVolumeEnabled {
+		logVolume := corev1.Volume{
+			Name: "odoo-logs",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: odoo.Name + "-logs-pvc",
+				},
+			},
+		}
+		job.Spec.Template.Spec.Volumes = append(job.Spec.Template.Spec.Volumes, logVolume)
+
+		logVolumeMount := corev1.VolumeMount{
+			Name:      "odoo-logs",
+			MountPath: "/var/log/odoo",
+		}
+		job.Spec.Template.Spec.Containers[0].VolumeMounts = append(job.Spec.Template.Spec.Containers[0].VolumeMounts, logVolumeMount)
+	}
+
+	ctrl.SetControllerReference(odoo, job, r.Scheme)
+	return job
+}
+
 func (r *OdooReconciler) jobForAddonsDownload(odoo *odoov1alpha1.Odoo, repositories []odoov1alpha1.GitRepositorySpec, sshSecrets []string) *batchv1.Job {
 	ls := labelsForOdoo(odoo.Name)
 	jobName := odoo.Name + "-addons-download-job"
@@ -1360,7 +1469,7 @@ func (r *OdooReconciler) configMapForOdoo(odoo *odoov1alpha1.Odoo, dbHost string
 
 	// Dynamically build addons_path
 	var addonsPathParts = make([]string, 0, 5) // Preallocate with estimated size to satisfy linter
-	addonsPathParts = append(addonsPathParts, "/usr/lib/python3/dist-packages/")
+	addonsPathParts = append(addonsPathParts, "/usr/lib/python3/dist-packages/odoo/addons")
 
 	// Add Enterprise path if enabled
 	if odoo.Spec.Enterprise.Enabled {
