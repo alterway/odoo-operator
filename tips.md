@@ -1,0 +1,1 @@
+make generate && make manifests && make docker-buildx IMG=alterway/odoo-operator:v0.4.9 && make deploy IMG=alterway/odoo-operator:v0.4.9
