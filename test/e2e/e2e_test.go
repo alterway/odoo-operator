@@ -349,6 +349,102 @@ spec:
 			Eventually(verifyJobCreated, 2*time.Minute, time.Second).Should(Succeed())
 		})
 
+		It("should perform a backup to PVC", func() {
+			// 1. Create destination PVC
+			const pvcContent = `
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backup-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+`
+			pvcPath := filepath.Join("/tmp", "backup-pvc.yaml")
+			err := os.WriteFile(pvcPath, []byte(pvcContent), 0644)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Creating destination PVC for backup")
+			cmd := exec.Command("kubectl", "apply", "-f", pvcPath, "-n", namespace)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			// 2. Deploy Odoo for backup (using a separate instance to be clean)
+			const odooBackupSampleContent = `
+apiVersion: cloud.alterway.fr/v1alpha1
+kind: Odoo
+metadata:
+  name: odoo-for-backup
+spec:
+  size: 1
+  version: "19"
+  service:
+    type: ClusterIP
+  logs:
+    volumeEnabled: false
+  storage:
+    data:
+      size: "1Gi"
+      accessMode: ReadWriteOnce
+    addons:
+      size: "1Gi"
+      accessMode: ReadWriteOnce
+`
+			odooSamplePath := filepath.Join("/tmp", "odoo-for-backup.yaml")
+			err = os.WriteFile(odooSamplePath, []byte(odooBackupSampleContent), 0644)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Deploying Odoo for backup")
+			cmd = exec.Command("kubectl", "apply", "-f", odooSamplePath, "-n", namespace)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			// 3. Create OdooBackup CR
+			const backupContent = `
+apiVersion: cloud.alterway.fr/v1alpha1
+kind: OdooBackup
+metadata:
+  name: odoo-backup-test
+spec:
+  odooRef:
+    name: odoo-for-backup
+  storageLocation:
+    pvc:
+      claimName: backup-pvc
+`
+			backupPath := filepath.Join("/tmp", "odoo-backup-test.yaml")
+			err = os.WriteFile(backupPath, []byte(backupContent), 0644)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Creating OdooBackup CR")
+			cmd = exec.Command("kubectl", "apply", "-f", backupPath, "-n", namespace)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying Backup Job creation")
+			jobName := "odoo-backup-test-job"
+			verifyJobCreated := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "job", jobName, "-n", namespace)
+				_, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+			}
+			Eventually(verifyJobCreated, 1*time.Minute, time.Second).Should(Succeed())
+
+			By("Waiting for Backup completion")
+			// Since it's a dummy job (busybox echo), it should complete quickly.
+			verifyBackupCompleted := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "odoobackup", "odoo-backup-test", "-n", namespace,
+					"-o", "jsonpath={.status.conditions[?(@.type=='Completed')].status}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("True"))
+			}
+			Eventually(verifyBackupCompleted, 2*time.Minute, time.Second).Should(Succeed())
+		})
+
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
 		// TODO: Customize the e2e test suite with scenarios specific to your project.
