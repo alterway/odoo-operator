@@ -5,6 +5,9 @@ metadata:
 spec:
   size: 1
   version: "19"
+
+  logs:
+    volumeEnabled: false
   
   # Configuration pour les mises à jour automatiques
   upgrade:

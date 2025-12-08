@@ -16,7 +16,8 @@ spec:
     type: ClusterIP
   
   logs:
-    volumeEnabled: true
+    volumeEnabled: false
+
 
   storage:
     data:
