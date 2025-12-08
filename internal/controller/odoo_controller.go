@@ -1523,7 +1523,7 @@ func (r *OdooReconciler) pvcForOdoo(odoo *odoov1alpha1.Odoo, name string) *corev
 
 	var storageSpec odoov1alpha1.StorageSpec
 	var defaultSize string
-	var defaultAccessMode corev1.PersistentVolumeAccessMode = corev1.ReadWriteMany
+	var defaultAccessMode = corev1.ReadWriteMany
 
 	switch name {
 	case "data":
