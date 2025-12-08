@@ -37,7 +37,7 @@ import (
 
 	odoov1alpha1 "cloud.alterway.fr/operator/api/v1alpha1"
 	"cloud.alterway.fr/operator/internal/controller"
-	//+kubebuilder:scaffold:imports
+	// +kubebuilder:scaffold:imports
 )
 
 var (
