@@ -1730,7 +1730,7 @@ func (r *OdooReconciler) statefulSetForPostgres(odoo *odoov1alpha1.Odoo, secretN
 							RunAsUser: func() *int64 { i := int64(0); return &i }(),
 						},
 						VolumeMounts: []corev1.VolumeMount{
-							{Name: "postgres-data", MountPath: "/var/lib/postgresql/data"},
+							{Name: "postgres-data", MountPath: "/var/lib/postgresql/data", SubPath: "pgdata"},
 						},
 					}},
 					Containers: []corev1.Container{{
@@ -1746,7 +1746,7 @@ func (r *OdooReconciler) statefulSetForPostgres(odoo *odoov1alpha1.Odoo, secretN
 						},
 						Resources: odoo.Spec.Resources.Postgres,
 						VolumeMounts: []corev1.VolumeMount{
-							{Name: "postgres-data", MountPath: "/var/lib/postgresql/data"},
+							{Name: "postgres-data", MountPath: "/var/lib/postgresql/data", SubPath: "pgdata"},
 						},
 					}},
 					Volumes: []corev1.Volume{
