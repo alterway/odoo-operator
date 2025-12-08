@@ -96,13 +96,13 @@ type OdooBackupStatus struct {
 	LastBackupName string `json:"lastBackupName,omitempty"`
 }
 
-//+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
-//+kubebuilder:printcolumn:name="Odoo Instance",type="string",JSONPath=".spec.odooRef.name"
-//+kubebuilder:printcolumn:name="Schedule",type="string",JSONPath=".spec.schedule"
-//+kubebuilder:printcolumn:name="Last Backup",type="date",JSONPath=".status.lastBackupTime"
-//+kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].reason"
-//+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Odoo Instance",type="string",JSONPath=".spec.odooRef.name"
+// +kubebuilder:printcolumn:name="Schedule",type="string",JSONPath=".spec.schedule"
+// +kubebuilder:printcolumn:name="Last Backup",type="date",JSONPath=".status.lastBackupTime"
+// +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].reason"
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // OdooBackup is the Schema for the odoobackups API
 type OdooBackup struct {
@@ -113,7 +113,7 @@ type OdooBackup struct {
 	Status OdooBackupStatus `json:"status,omitempty"`
 }
 
-//+kubebuilder:object:root=true
+// +kubebuilder:object:root=true
 
 // OdooBackupList contains a list of OdooBackup
 type OdooBackupList struct {

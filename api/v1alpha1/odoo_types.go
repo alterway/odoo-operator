@@ -333,7 +333,7 @@ type Odoo struct {
 	Status OdooStatus `json:"status,omitempty"`
 }
 
-//+kubebuilder:object:root=true
+// +kubebuilder:object:root=true
 
 // OdooList contains a list of Odoo
 type OdooList struct {

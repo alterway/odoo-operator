@@ -340,7 +340,7 @@ func (r *OdooReconciler) reconcileAddonsDownload(ctx context.Context, odoo *odoo
 
 		if addonsJob.Status.Succeeded == 0 {
 			if addonsJob.Status.Failed > 0 {
-				log.Error(fmt.Errorf("Addons Download Job failed"), "Job.Name", addonsJobName)
+				log.Error(fmt.Errorf("addons download job failed"), "Job.Name", addonsJobName)
 				r.setOdooCondition(&odoo.Status, metav1.Condition{
 					Type:    "Available",
 					Status:  metav1.ConditionFalse,
@@ -421,7 +421,7 @@ func (r *OdooReconciler) reconcileInitJob(ctx context.Context, odoo *odoov1alpha
 
 	if initJob.Status.Succeeded == 0 {
 		if initJob.Status.Failed > 0 {
-			log.Error(fmt.Errorf("DB initialization Job failed"), "Job details", "Job.Name", initJob.Name)
+			log.Error(fmt.Errorf("db initialization job failed"), "Job details", "Job.Name", initJob.Name)
 			log.Info("Updating Odoo status to DBInitFailed")
 			r.setOdooCondition(&odoo.Status, metav1.Condition{
 				Type:    "Available",
@@ -520,7 +520,7 @@ func (r *OdooReconciler) reconcileUpgrade(ctx context.Context, odoo *odoov1alpha
 
 		if upgradeJob.Status.Succeeded == 0 {
 			if upgradeJob.Status.Failed > 0 {
-				log.Error(fmt.Errorf("Upgrade Job failed"), "Job.Name", upgradeJobName)
+				log.Error(fmt.Errorf("upgrade job failed"), "Job.Name", upgradeJobName)
 				r.setOdooCondition(&odoo.Status, metav1.Condition{
 					Type:    "Available",
 					Status:  metav1.ConditionFalse,
@@ -567,13 +567,10 @@ func (r *OdooReconciler) reconcileModulesUpdate(ctx context.Context, odoo *odoov
 		err = r.Get(ctx, types.NamespacedName{Name: modulesUpdateJobName, Namespace: odoo.Namespace}, modulesUpdateJob)
 
 		if err != nil && errors.IsNotFound(err) {
-
 			job := r.jobForModulesUpdate(odoo, dbHost, secretName)
-
 			job.Name = modulesUpdateJobName
 
 			log.Info("Creating a new Modules Update Job", "Job.Namespace", job.Namespace, "Job.Name", job.Name)
-
 			if err := r.Create(ctx, job); err != nil {
 				log.Error(err, "Failed to create Modules Update Job")
 				return &ctrl.Result{}, err
@@ -599,7 +596,7 @@ func (r *OdooReconciler) reconcileModulesUpdate(ctx context.Context, odoo *odoov
 
 		if modulesUpdateJob.Status.Succeeded == 0 {
 			if modulesUpdateJob.Status.Failed > 0 {
-				log.Error(fmt.Errorf("Modules Update Job failed"), "Job.Name", modulesUpdateJobName)
+				log.Error(fmt.Errorf("modules update job failed"), "Job.Name", modulesUpdateJobName)
 				r.setOdooCondition(&odoo.Status, metav1.Condition{
 					Type:    "Available",
 					Status:  metav1.ConditionFalse,
@@ -611,6 +608,7 @@ func (r *OdooReconciler) reconcileModulesUpdate(ctx context.Context, odoo *odoov
 				}
 				return &ctrl.Result{}, fmt.Errorf("modules update job failed")
 			}
+
 			log.Info("Modules Update Job is still running", "Job.Name", modulesUpdateJobName)
 			return &ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 		}
@@ -1203,10 +1201,6 @@ func (r *OdooReconciler) jobForModulesUpdate(odoo *odoov1alpha1.Odoo, dbHost, se
 	modulesToInstall := "base" // Always include base to be safe, or just the list
 	if len(odoo.Spec.Modules.Install) > 0 {
 		modulesToInstall = strings.Join(odoo.Spec.Modules.Install, ",")
-	} else {
-		// If no modules specified, maybe we shouldn't run this job?
-		// But let's default to updating base
-		modulesToInstall = "base"
 	}
 
 	// Generate a deterministic name for the update job is handled by the caller (reconcileModulesUpdate)
