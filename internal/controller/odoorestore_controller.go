@@ -141,7 +141,7 @@ func (r *OdooRestoreReconciler) jobForRestore(restore *odoov1alpha1.OdooRestore)
 			},
 		},
 	}
-	ctrl.SetControllerReference(restore, job, r.Scheme)
+	_ = ctrl.SetControllerReference(restore, job, r.Scheme)
 	return job
 }
 

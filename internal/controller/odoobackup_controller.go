@@ -144,7 +144,7 @@ func (r *OdooBackupReconciler) jobForBackup(backup *odoov1alpha1.OdooBackup) *ba
 			},
 		},
 	}
-	ctrl.SetControllerReference(backup, job, r.Scheme)
+	_ = ctrl.SetControllerReference(backup, job, r.Scheme)
 	return job
 }
 
