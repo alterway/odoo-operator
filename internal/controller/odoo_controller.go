@@ -1076,19 +1076,19 @@ func (r *OdooReconciler) jobForAddonsDownload(odoo *odoov1alpha1.Odoo, repositor
 	jobName := odoo.Name + "-addons-download-job"
 
 	var scriptBuilder strings.Builder
-	scriptBuilder.WriteString("#!/bin/sh\nset -e\n\n")
+	_, _ = scriptBuilder.WriteString("#!/bin/sh\nset -e\n\n")
 
 	// Setup SSH for all provided secrets
-	scriptBuilder.WriteString("mkdir -p /root/.ssh\n")
-	scriptBuilder.WriteString("chmod 700 /root/.ssh\n")
-	scriptBuilder.WriteString("echo \"StrictHostKeyChecking no\" >> /root/.ssh/config\n")
+	_, _ = scriptBuilder.WriteString("mkdir -p /root/.ssh\n")
+	_, _ = scriptBuilder.WriteString("chmod 700 /root/.ssh\n")
+	_, _ = scriptBuilder.WriteString("echo \"StrictHostKeyChecking no\" >> /root/.ssh/config\n")
 	for i := range sshSecrets {
 		// Mount path for each secret is unique, /etc/ssh-key-<index>
-		scriptBuilder.WriteString(fmt.Sprintf("cp /etc/ssh-key-%d/ssh-privatekey /root/.ssh/id_rsa_%d\n", i, i))
-		scriptBuilder.WriteString(fmt.Sprintf("chmod 600 /root/.ssh/id_rsa_%d\n", i))
-		scriptBuilder.WriteString(fmt.Sprintf("echo \"IdentityFile /root/.ssh/id_rsa_%d\" >> /root/.ssh/config\n", i))
+		_, _ = scriptBuilder.WriteString(fmt.Sprintf("cp /etc/ssh-key-%d/ssh-privatekey /root/.ssh/id_rsa_%d\n", i, i))
+		_, _ = scriptBuilder.WriteString(fmt.Sprintf("chmod 600 /root/.ssh/id_rsa_%d\n", i))
+		_, _ = scriptBuilder.WriteString(fmt.Sprintf("echo \"IdentityFile /root/.ssh/id_rsa_%d\" >> /root/.ssh/config\n", i))
 	}
-	scriptBuilder.WriteString("\n")
+	_, _ = scriptBuilder.WriteString("\n")
 
 	// Loop through repositories and clone/update
 	for _, repo := range repositories {
@@ -1105,10 +1105,10 @@ func (r *OdooReconciler) jobForAddonsDownload(odoo *odoov1alpha1.Odoo, repositor
 		isSSH := strings.HasPrefix(repo.URL, "git@")
 		if isSSH {
 			host := strings.Split(strings.Split(repo.URL, "@")[1], ":")[0]
-			scriptBuilder.WriteString(fmt.Sprintf("ssh-keyscan %s >> /root/.ssh/known_hosts\n", host))
+			_, _ = scriptBuilder.WriteString(fmt.Sprintf("ssh-keyscan %s >> /root/.ssh/known_hosts\n", host))
 		}
 
-		scriptBuilder.WriteString(fmt.Sprintf(`
+		_, _ = scriptBuilder.WriteString(fmt.Sprintf(`
 TARGET_DIR="/mnt/extra-addons/%s" # Each repo gets its own subdirectory
 
 if [ -d "$TARGET_DIR/.git" ]; then
@@ -1279,9 +1279,9 @@ func (r *OdooReconciler) configMapForOdoo(odoo *odoov1alpha1.Odoo, dbHost string
 
 	// Build the odoo.conf content
 	var builder strings.Builder
-	builder.WriteString("[options]\n")
+	_, _ = builder.WriteString("[options]\n")
 	for key, value := range options {
-		builder.WriteString(fmt.Sprintf("%s = %s\n", key, value))
+		_, _ = builder.WriteString(fmt.Sprintf("%s = %s\n", key, value))
 	}
 	odooConfContent := builder.String()
 

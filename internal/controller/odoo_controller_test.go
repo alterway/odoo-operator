@@ -216,13 +216,13 @@ var _ = Describe("Odoo Controller", func() {
 			resource := &odoov1alpha1.Odoo{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			if err == nil {
-				Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+				_ = k8sClient.Delete(ctx, resource)
 			}
 			// Clean up jobs if they exist
 			job := &batchv1.Job{}
 			err = k8sClient.Get(ctx, types.NamespacedName{Name: resourceName + "-db-init", Namespace: "default"}, job)
 			if err == nil {
-				k8sClient.Delete(ctx, job)
+				_ = k8sClient.Delete(ctx, job)
 			}
 		})
 
@@ -300,13 +300,13 @@ var _ = Describe("Odoo Controller", func() {
 			resource := &odoov1alpha1.Odoo{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			if err == nil {
-				Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+				_ = k8sClient.Delete(ctx, resource)
 			}
 			// Clean up jobs
 			jobList := &batchv1.JobList{}
-			k8sClient.List(ctx, jobList, client.InNamespace("default"))
+			_ = k8sClient.List(ctx, jobList, client.InNamespace("default"))
 			for _, job := range jobList.Items {
-				k8sClient.Delete(ctx, &job)
+				_ = k8sClient.Delete(ctx, &job)
 			}
 		})
 
@@ -338,7 +338,7 @@ var _ = Describe("Odoo Controller", func() {
 					return ""
 				}
 				updatedOdoo := &odoov1alpha1.Odoo{}
-				k8sClient.Get(ctx, typeNamespacedName, updatedOdoo)
+				_ = k8sClient.Get(ctx, typeNamespacedName, updatedOdoo)
 				return updatedOdoo.Status.CurrentVersion
 			}, "10s", "1s").Should(Equal("16.0"), "CurrentVersion should be set to 16.0")
 
@@ -379,14 +379,14 @@ var _ = Describe("Odoo Controller", func() {
 				if err != nil {
 					return ""
 				}
-				k8sClient.Get(ctx, typeNamespacedName, updatedOdoo)
+				_ = k8sClient.Get(ctx, typeNamespacedName, updatedOdoo)
 				return updatedOdoo.Status.CurrentVersion
 			}, "10s", "1s").Should(Equal("17.0"), "CurrentVersion should be updated")
 
 			// Verify StatefulSet image
 			sts := &appsv1.StatefulSet{}
 			Eventually(func() string {
-				k8sClient.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: "default"}, sts)
+				_ = k8sClient.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: "default"}, sts)
 				if len(sts.Spec.Template.Spec.Containers) > 0 {
 					return sts.Spec.Template.Spec.Containers[0].Image
 				}
@@ -435,17 +435,17 @@ var _ = Describe("Odoo Controller", func() {
 			resource := &odoov1alpha1.Odoo{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			if err == nil {
-				Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+				_ = k8sClient.Delete(ctx, resource)
 			}
 			secret := &corev1.Secret{}
 			err = k8sClient.Get(ctx, types.NamespacedName{Name: "ssh-key-secret", Namespace: "default"}, secret)
 			if err == nil {
-				k8sClient.Delete(ctx, secret)
+				_ = k8sClient.Delete(ctx, secret)
 			}
 			job := &batchv1.Job{}
 			err = k8sClient.Get(ctx, types.NamespacedName{Name: resourceName + "-addons-download-job", Namespace: "default"}, job)
 			if err == nil {
-				k8sClient.Delete(ctx, job)
+				_ = k8sClient.Delete(ctx, job)
 			}
 		})
 
