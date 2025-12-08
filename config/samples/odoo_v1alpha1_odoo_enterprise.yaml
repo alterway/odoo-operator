@@ -1,0 +1,50 @@
+apiVersion: cloud.alterway.fr/v1alpha1
+kind: Odoo
+metadata:
+  name: odoo-enterprise-sample
+spec:
+  size: 1
+  version: "16.0" # Ou la version de l'image Odoo compatible avec votre repo Enterprise
+  
+  enterprise:
+    enabled: true
+    repositoryURL: "git@github.com:odoo/enterprise.git" # Ou votre repo privé
+    version: "16.0" # Branche ou tag à utiliser, souvent la même que la version Odoo
+    sshKeySecretRef: "my-enterprise-ssh-key" # Nom du Secret contenant la clé SSH
+
+  service:
+    type: ClusterIP
+  
+  logs:
+    volumeEnabled: false
+
+  storage:
+    data:
+      size: "5Gi"
+      accessMode: ReadWriteOnce
+    addons:
+      size: "5Gi"
+      accessMode: ReadWriteOnce
+
+  resources:
+    odoo:
+      requests:
+        cpu: "500m"
+        memory: "512Mi"
+      limits:
+        cpu: "1000m"
+        memory: "1Gi"
+    postgres:
+      requests:
+        cpu: "250m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+    init:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "200m"
+        memory: "256Mi"

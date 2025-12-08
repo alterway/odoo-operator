@@ -230,6 +230,70 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 	}
 
+	// --- ENTERPRISE SETUP ---
+	if odoo.Spec.Enterprise.Enabled {
+		if odoo.Spec.Enterprise.SSHKeySecretRef == "" {
+			err := fmt.Errorf("SSHKeySecretRef is required when Enterprise is enabled")
+			log.Error(err, "Validation Error")
+			return ctrl.Result{}, err
+		}
+
+		// Check for SSH Secret existence
+		sshSecret := &corev1.Secret{}
+		err = r.Get(ctx, types.NamespacedName{Name: odoo.Spec.Enterprise.SSHKeySecretRef, Namespace: odoo.Namespace}, sshSecret)
+		if err != nil {
+			log.Error(err, "Failed to get SSH Key Secret for Enterprise")
+			return ctrl.Result{}, err
+		}
+
+		// Manage Enterprise Init Job
+		entJobName := odoo.Name + "-enterprise-init"
+		entJob := &batchv1.Job{}
+		err = r.Get(ctx, types.NamespacedName{Name: entJobName, Namespace: odoo.Namespace}, entJob)
+
+		if err != nil && errors.IsNotFound(err) {
+			job := r.jobForEnterpriseDownload(odoo)
+			log.Info("Creating Enterprise Download Job", "Job.Namespace", job.Namespace, "Job.Name", job.Name)
+			if err := r.Create(ctx, job); err != nil {
+				log.Error(err, "Failed to create Enterprise Download Job")
+				return ctrl.Result{}, err
+			}
+			r.setOdooCondition(&odoo.Status, metav1.Condition{
+				Type:    "Available",
+				Status:  metav1.ConditionFalse,
+				Reason:  "EnterpriseInitializing",
+				Message: "Downloading Enterprise modules...",
+			})
+			if err := r.Status().Update(ctx, odoo); err != nil {
+				log.Error(err, "Failed to update status for Enterprise Init")
+			}
+			return ctrl.Result{Requeue: true}, nil
+		} else if err != nil {
+			log.Error(err, "Failed to get Enterprise Download Job")
+			return ctrl.Result{}, err
+		}
+
+		if entJob.Status.Succeeded == 0 {
+			if entJob.Status.Failed > 0 {
+				log.Error(fmt.Errorf("Enterprise Download Job failed"), "Job.Name", entJobName)
+				r.setOdooCondition(&odoo.Status, metav1.Condition{
+					Type:    "Available",
+					Status:  metav1.ConditionFalse,
+					Reason:  "EnterpriseInitFailed",
+					Message: "Failed to download Enterprise modules.",
+				})
+				if err := r.Status().Update(ctx, odoo); err != nil {
+					log.Error(err, "Failed to update status for Enterprise failure")
+				}
+				return ctrl.Result{}, fmt.Errorf("enterprise download job failed")
+			}
+			log.Info("Enterprise Download Job is still running", "Job.Name", entJobName)
+			return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+		}
+		// Job succeeded, proceed.
+		log.Info("Enterprise Download Job completed successfully")
+	}
+
 	// Create the ConfigMap if it doesn't exist
 	cm := &corev1.ConfigMap{}
 	err = r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-config", Namespace: odoo.Namespace}, cm)
@@ -973,6 +1037,99 @@ func (r *OdooReconciler) jobForOdooUpgrade(odoo *odoov1alpha1.Odoo, dbHost, secr
 			MountPath: "/var/log/odoo",
 		}
 		job.Spec.Template.Spec.Containers[0].VolumeMounts = append(job.Spec.Template.Spec.Containers[0].VolumeMounts, logVolumeMount)
+	}
+
+	ctrl.SetControllerReference(odoo, job, r.Scheme)
+	return job
+}
+
+func (r *OdooReconciler) jobForEnterpriseDownload(odoo *odoov1alpha1.Odoo) *batchv1.Job {
+	ls := labelsForOdoo(odoo.Name)
+	jobName := odoo.Name + "-enterprise-init"
+
+	repoURL := odoo.Spec.Enterprise.RepositoryURL
+	if repoURL == "" {
+		repoURL = "git@github.com:odoo/enterprise.git"
+	}
+
+	targetVersion := odoo.Spec.Enterprise.Version
+	if targetVersion == "" {
+		targetVersion = odoo.Spec.Version
+		if targetVersion == "" {
+			targetVersion = "19"
+		}
+	}
+
+	// Script to clone or update the repo
+	// We clone into a subdirectory 'enterprise'
+	script := fmt.Sprintf(`
+mkdir -p /root/.ssh
+cp /etc/ssh-key/ssh-privatekey /root/.ssh/id_rsa
+chmod 600 /root/.ssh/id_rsa
+echo "StrictHostKeyChecking no" >> /root/.ssh/config
+
+TARGET_DIR="/mnt/extra-addons/enterprise"
+
+if [ -d "$TARGET_DIR/.git" ]; then
+    echo "Enterprise repo exists, updating..."
+    cd "$TARGET_DIR"
+    git fetch origin
+    git checkout "%s"
+    git pull origin "%s"
+else
+    echo "Cloning Enterprise repo..."
+    git clone -b "%s" "%s" "$TARGET_DIR"
+fi
+`, targetVersion, targetVersion, targetVersion, repoURL)
+
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      jobName,
+			Namespace: odoo.Namespace,
+			Labels:    ls,
+		},
+		Spec: batchv1.JobSpec{
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: ls,
+				},
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyOnFailure,
+					Containers: []corev1.Container{
+						{
+							Name:    "git-clone",
+							Image:   "alpine/git",
+							Command: []string{"/bin/sh", "-c", script},
+							VolumeMounts: []corev1.VolumeMount{
+								{Name: "odoo-addons-all", MountPath: "/mnt/extra-addons"},
+								{Name: "ssh-key", MountPath: "/etc/ssh-key", ReadOnly: true},
+							},
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "odoo-addons-all",
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: odoo.Name + "-addons-pvc",
+								},
+							},
+						},
+						{
+							Name: "ssh-key",
+							VolumeSource: corev1.VolumeSource{
+								Secret: &corev1.SecretVolumeSource{
+									SecretName: odoo.Spec.Enterprise.SSHKeySecretRef,
+									Items: []corev1.KeyToPath{
+										{Key: "ssh-privatekey", Path: "ssh-privatekey"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 
 	ctrl.SetControllerReference(odoo, job, r.Scheme)

@@ -78,6 +78,10 @@ type OdooSpec struct {
 	// +optional
 	Upgrade UpgradeSpec `json:"upgrade,omitempty"`
 
+	// Enterprise defines the configuration for Odoo Enterprise edition.
+	// +optional
+	Enterprise EnterpriseSpec `json:"enterprise,omitempty"`
+
 	// Version defines the Odoo version to be deployed.
 	// This will be used as the tag for the Docker image (e.g., "19", "18.0").
 	// Defaults to "19" if not specified.
@@ -123,6 +127,30 @@ type UpgradeSpec struct {
 	// Defaults to "all" if not specified.
 	// +optional
 	Modules string `json:"modules,omitempty"`
+}
+
+// EnterpriseSpec defines the configuration for Odoo Enterprise.
+type EnterpriseSpec struct {
+	// Enabled enables the Odoo Enterprise edition.
+	// If set to true, the operator will download the Enterprise addons.
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+
+	// RepositoryURL is the Git URL of the Enterprise repository.
+	// Defaults to "git@github.com:odoo/enterprise.git" if not specified.
+	// +optional
+	RepositoryURL string `json:"repositoryURL,omitempty"`
+
+	// Version is the git reference (branch, tag, or commit) to checkout.
+	// If not specified, it defaults to the Odoo version (Spec.Version).
+	// +optional
+	Version string `json:"version,omitempty"`
+
+	// SSHKeySecretRef is the name of the secret containing the SSH private key
+	// for authentication with the git repository.
+	// The key must be stored under the key 'ssh-privatekey'.
+	// +optional
+	SSHKeySecretRef string `json:"sshKeySecretRef,omitempty"`
 }
 
 // StorageConfigurationSpec holds the storage configuration for all PVCs.

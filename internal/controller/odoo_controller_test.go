@@ -394,4 +394,93 @@ var _ = Describe("Odoo Controller", func() {
 			}, "10s", "1s").Should(Equal("odoo:17.0"), "StatefulSet image should be updated")
 		})
 	})
+
+	Context("When enabling Enterprise edition", func() {
+		const resourceName = "test-enterprise"
+		ctx := context.Background()
+		typeNamespacedName := types.NamespacedName{Name: resourceName, Namespace: "default"}
+
+		BeforeEach(func() {
+			By("creating SSH secret")
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "ssh-key-secret",
+					Namespace: "default",
+				},
+				StringData: map[string]string{
+					"ssh-privatekey": "fake-key",
+				},
+			}
+			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+
+			By("creating Odoo CR with Enterprise enabled")
+			odoo := &odoov1alpha1.Odoo{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: "default",
+				},
+				Spec: odoov1alpha1.OdooSpec{
+					Size:    1,
+					Version: "16.0",
+					Enterprise: odoov1alpha1.EnterpriseSpec{
+						Enabled:         true,
+						SSHKeySecretRef: "ssh-key-secret",
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, odoo)).To(Succeed())
+		})
+
+		AfterEach(func() {
+			resource := &odoov1alpha1.Odoo{}
+			err := k8sClient.Get(ctx, typeNamespacedName, resource)
+			if err == nil {
+				Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			}
+			secret := &corev1.Secret{}
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: "ssh-key-secret", Namespace: "default"}, secret)
+			if err == nil {
+				k8sClient.Delete(ctx, secret)
+			}
+			job := &batchv1.Job{}
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: resourceName + "-enterprise-init", Namespace: "default"}, job)
+			if err == nil {
+				k8sClient.Delete(ctx, job)
+			}
+		})
+
+		It("should create an enterprise download job", func() {
+			controllerReconciler := &OdooReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			// Run reconcile until Job is created (need multiple passes for PVCs etc.)
+			entJob := &batchv1.Job{}
+			entJobName := resourceName + "-enterprise-init"
+
+			Eventually(func() error {
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+				if err != nil {
+					return err
+				}
+				return k8sClient.Get(ctx, types.NamespacedName{Name: entJobName, Namespace: "default"}, entJob)
+			}, "10s", "1s").Should(Succeed(), "Enterprise Job should be created")
+
+			// Check mounts
+			foundSSH := false
+			foundAddons := false
+			for _, vol := range entJob.Spec.Template.Spec.Volumes {
+				if vol.Name == "ssh-key" {
+					foundSSH = true
+					Expect(vol.Secret.SecretName).To(Equal("ssh-key-secret"))
+				}
+				if vol.Name == "odoo-addons-all" {
+					foundAddons = true
+				}
+			}
+			Expect(foundSSH).To(BeTrue(), "SSH Key volume should be mounted")
+			Expect(foundAddons).To(BeTrue(), "Addons PVC should be mounted")
+		})
+	})
 })

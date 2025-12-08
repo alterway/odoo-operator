@@ -67,6 +67,32 @@ spec:
                   If in managed mode and this field is not provided, a default secret will be created.
                   The secret must contain the keys: 'user', 'password', and 'dbname'.
                 type: string
+              enterprise:
+                description: Enterprise defines the configuration for Odoo Enterprise
+                  edition.
+                properties:
+                  enabled:
+                    description: |-
+                      Enabled enables the Odoo Enterprise edition.
+                      If set to true, the operator will download the Enterprise addons.
+                    type: boolean
+                  repositoryURL:
+                    description: |-
+                      RepositoryURL is the Git URL of the Enterprise repository.
+                      Defaults to "git@github.com:odoo/enterprise.git" if not specified.
+                    type: string
+                  sshKeySecretRef:
+                    description: |-
+                      SSHKeySecretRef is the name of the secret containing the SSH private key
+                      for authentication with the git repository.
+                      The key must be stored under the key 'ssh-privatekey'.
+                    type: string
+                  version:
+                    description: |-
+                      Version is the git reference (branch, tag, or commit) to checkout.
+                      If not specified, it defaults to the Odoo version (Spec.Version).
+                    type: string
+                type: object
               ingress:
                 description: Ingress defines the desired state for the Ingress resource.
                 properties:
