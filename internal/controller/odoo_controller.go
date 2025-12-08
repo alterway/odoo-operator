@@ -1720,6 +1720,19 @@ func (r *OdooReconciler) statefulSetForPostgres(odoo *odoov1alpha1.Odoo, secretN
 						RunAsGroup: func() *int64 { i := int64(999); return &i }(),
 						FSGroup:    func() *int64 { i := int64(999); return &i }(),
 					},
+					InitContainers: []corev1.Container{{
+						Name:  "init-postgres",
+						Image: "busybox",
+						Command: []string{"sh", "-c",
+							"chown -R 999:999 /var/lib/postgresql/data",
+						},
+						SecurityContext: &corev1.SecurityContext{
+							RunAsUser: func() *int64 { i := int64(0); return &i }(),
+						},
+						VolumeMounts: []corev1.VolumeMount{
+							{Name: "postgres-data", MountPath: "/var/lib/postgresql/data"},
+						},
+					}},
 					Containers: []corev1.Container{{
 						Name:  "postgres",
 						Image: pgImage,
