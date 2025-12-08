@@ -282,6 +282,11 @@ type OdooStatus struct {
 	// +optional
 	CurrentVersion string `json:"currentVersion,omitempty"`
 
+	// ModulesHash tracks the hash of the modules configuration (install list + repos).
+	// Used to detect changes and trigger updates.
+	// +optional
+	ModulesHash string `json:"modulesHash,omitempty"`
+
 	// conditions represent the current state of the Odoo resource.
 	// +listType=map
 	// +listMapKey=type

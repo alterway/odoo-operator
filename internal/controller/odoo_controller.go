@@ -18,6 +18,9 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -435,6 +438,15 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		if odoo.Status.CurrentVersion != targetVersion {
 			log.Info("First installation detected, setting CurrentVersion", "Version", targetVersion)
 			odoo.Status.CurrentVersion = targetVersion
+
+			// Calculate and set initial ModulesHash to avoid immediate update trigger
+			initialHash, err := computeModulesHash(odoo.Spec.Modules)
+			if err == nil {
+				odoo.Status.ModulesHash = initialHash
+			} else {
+				log.Error(err, "Failed to compute initial modules hash")
+			}
+
 			if err := r.Status().Update(ctx, odoo); err != nil {
 				log.Error(err, "Failed to update Odoo status (CurrentVersion)")
 				return ctrl.Result{}, err
@@ -515,6 +527,80 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			return ctrl.Result{}, err
 		}
 		// Continue to update StatefulSet...
+	}
+
+	// --- MODULES UPDATE ---
+	// Check if modules configuration has changed
+	currentModulesHash := odoo.Status.ModulesHash
+	targetModulesHash, err := computeModulesHash(odoo.Spec.Modules)
+	if err != nil {
+		log.Error(err, "Failed to compute modules hash")
+		return ctrl.Result{}, err
+	}
+
+	if currentModulesHash != targetModulesHash {
+		// Modules config changed -> trigger update job
+		// We use a simplified name for the job based on hash prefix to avoid length issues
+		modulesUpdateJobName := fmt.Sprintf("%s-update-modules-%s", odoo.Name, targetModulesHash[:8])
+		modulesUpdateJob := &batchv1.Job{}
+		err = r.Get(ctx, types.NamespacedName{Name: modulesUpdateJobName, Namespace: odoo.Namespace}, modulesUpdateJob)
+
+		if err != nil && errors.IsNotFound(err) {
+			// Job doesn't exist, create it
+			job := r.jobForOdooUpgrade(odoo, dbHost, secretName)
+			job.Name = modulesUpdateJobName // Override name
+
+			log.Info("Creating a new Modules Update Job", "Job.Namespace", job.Namespace, "Job.Name", job.Name)
+			if err := r.Create(ctx, job); err != nil {
+				log.Error(err, "Failed to create Modules Update Job")
+				return ctrl.Result{}, err
+			}
+
+			// Update status
+			log.Info("Updating Odoo status to UpdatingModules")
+			r.setOdooCondition(&odoo.Status, metav1.Condition{
+				Type:    "Available",
+				Status:  metav1.ConditionFalse,
+				Reason:  "UpdatingModules",
+				Message: "Updating installed modules...",
+			})
+			if err := r.Status().Update(ctx, odoo); err != nil {
+				log.Error(err, "Failed to update Odoo status for modules update start")
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{Requeue: true}, nil
+
+		} else if err != nil {
+			log.Error(err, "Failed to get Modules Update Job")
+			return ctrl.Result{}, err
+		}
+
+		// Job exists, check status
+		if modulesUpdateJob.Status.Succeeded == 0 {
+			if modulesUpdateJob.Status.Failed > 0 {
+				log.Error(fmt.Errorf("Modules Update Job failed"), "Job.Name", modulesUpdateJobName)
+				r.setOdooCondition(&odoo.Status, metav1.Condition{
+					Type:    "Available",
+					Status:  metav1.ConditionFalse,
+					Reason:  "ModulesUpdateFailed",
+					Message: "The modules update job failed.",
+				})
+				if err := r.Status().Update(ctx, odoo); err != nil {
+					log.Error(err, "Failed to update Odoo status for modules update failure")
+				}
+				return ctrl.Result{}, fmt.Errorf("modules update job failed")
+			}
+			log.Info("Modules Update Job is still running", "Job.Name", modulesUpdateJobName)
+			return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+		}
+
+		// Succeeded
+		log.Info("Modules Update Job completed successfully", "Job.Name", modulesUpdateJobName)
+		odoo.Status.ModulesHash = targetModulesHash
+		if err := r.Status().Update(ctx, odoo); err != nil {
+			log.Error(err, "Failed to update Odoo status after modules update success")
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Check if the statefulset already exists before setting the status to "Creating".
@@ -788,10 +874,12 @@ func (r *OdooReconciler) statefulSetForOdoo(odoo *odoov1alpha1.Odoo, dbHost, sec
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: ls,
+					Annotations: map[string]string{
+						"odoo.cloud.alterway.fr/modules-hash": odoo.Status.ModulesHash,
+					},
 				},
 				Spec: corev1.PodSpec{
-					SecurityContext: &corev1.PodSecurityContext{
-						RunAsUser:  func() *int64 { i := int64(0); return &i }(),
+					SecurityContext: &corev1.PodSecurityContext{RunAsUser: func() *int64 { i := int64(0); return &i }(),
 						RunAsGroup: func() *int64 { i := int64(0); return &i }(),
 						FSGroup:    func() *int64 { i := int64(0); return &i }(),
 					},
@@ -1652,4 +1740,13 @@ func removeString(slice []string, s string) (result []string) {
 		result = append(result, item)
 	}
 	return
+}
+
+func computeModulesHash(modulesSpec odoov1alpha1.ModulesSpec) (string, error) {
+	bytes, err := json.Marshal(modulesSpec)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.Sum256(bytes)
+	return hex.EncodeToString(hash[:]), nil
 }
