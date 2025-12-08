@@ -38,12 +38,12 @@ type OdooRestoreReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-//+kubebuilder:rbac:groups=cloud.alterway.fr,resources=odoorestores,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=cloud.alterway.fr,resources=odoorestores/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=cloud.alterway.fr,resources=odoorestores/finalizers,verbs=update
-//+kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
-//+kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=cloud.alterway.fr,resources=odoorestores,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=cloud.alterway.fr,resources=odoorestores/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=cloud.alterway.fr,resources=odoorestores/finalizers,verbs=update
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
