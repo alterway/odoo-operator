@@ -4,6 +4,18 @@
 ## Description
 // TODO(user): An in-depth paragraph about your project and overview of use
 
+## Features
+
+This Odoo Operator provides the following key features:
+
+*   **Odoo Instance Management**: Deploy and manage Odoo StatefulSets, including PostgreSQL instances (managed or external) and associated services and ingresses.
+*   **Resource Management**: Configure CPU and memory resource requests and limits for Odoo, PostgreSQL, and initialization/upgrade containers.
+*   **Persistent Storage**: Automatic provisioning of Persistent Volume Claims (PVCs) for Odoo data, logs, and addons, with configurable sizes and access modes.
+*   **Backup and Restore**: Implement backup (`OdooBackup`) and restore (`OdooRestore`) operations, supporting various storage locations (e.g., PVC-based backups).
+*   **Automatic Module Upgrades**: Automatically trigger Odoo module upgrades (e.g., `-u all` or specific modules) when the Odoo version in the Custom Resource (CR) is updated.
+*   **Odoo Enterprise Support**: Seamless integration for Odoo Enterprise Edition, including automatic cloning of the Enterprise Git repository into the addons volume using SSH keys.
+*   **Custom Module Integration**: Support for installing a custom list of Odoo modules (`-i` command) during initialization and updates. This includes the ability to clone additional Git repositories containing custom or community addons into dedicated subdirectories within the addons volume.
+
 ## Getting Started
 
 ### Prerequisites
