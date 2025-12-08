@@ -82,6 +82,10 @@ type OdooSpec struct {
 	// +optional
 	Enterprise EnterpriseSpec `json:"enterprise,omitempty"`
 
+	// Modules defines the Odoo modules configuration.
+	// +optional
+	Modules ModulesSpec `json:"modules,omitempty"`
+
 	// Version defines the Odoo version to be deployed.
 	// This will be used as the tag for the Docker image (e.g., "19", "18.0").
 	// Defaults to "19" if not specified.
@@ -149,6 +153,44 @@ type EnterpriseSpec struct {
 	// SSHKeySecretRef is the name of the secret containing the SSH private key
 	// for authentication with the git repository.
 	// The key must be stored under the key 'ssh-privatekey'.
+	// +optional
+	SSHKeySecretRef string `json:"sshKeySecretRef,omitempty"`
+}
+
+// ModulesSpec defines the Odoo modules configuration.
+type ModulesSpec struct {
+	// Install is a list of Odoo modules to install/update at initialization/upgrade.
+	// Example: ["sale", "crm", "account"]
+	// These modules must be available in the Odoo image or in configured repositories.
+	// +optional
+	Install []string `json:"install,omitempty"`
+
+	// Repositories defines additional Git repositories to clone into the addons volume.
+	// Useful for custom or community modules not bundled with the Odoo image.
+	// These repositories will be cloned into /mnt/extra-addons/<repository.Name>.
+	// +optional
+	Repositories []GitRepositorySpec `json:"repositories,omitempty"`
+}
+
+// GitRepositorySpec defines details for cloning a Git repository.
+type GitRepositorySpec struct {
+	// Name is the name of the subdirectory within /mnt/extra-addons where the repository will be cloned.
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// URL is the Git URL of the repository (e.g., "https://github.com/my-org/my-addons.git").
+	// +kubebuilder:validation:Required
+	URL string `json:"url"`
+
+	// Version is the git reference (branch, tag, or commit) to checkout.
+	// Defaults to "master" or "main" if not specified.
+	// +optional
+	Version string `json:"version,omitempty"`
+
+	// SSHKeySecretRef is the name of the secret containing the SSH private key
+	// for authentication with the git repository.
+	// The key must be stored under the key 'ssh-privatekey'.
+	// This is only used for SSH URLs.
 	// +optional
 	SSHKeySecretRef string `json:"sshKeySecretRef,omitempty"`
 }

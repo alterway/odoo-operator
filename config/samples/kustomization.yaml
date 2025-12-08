@@ -5,4 +5,5 @@ resources:
 - cloud.alterway.fr_v1alpha1_odoobackup_s3.yaml
 - odoo_v1alpha1_odoo_upgrade.yaml
 - odoo_v1alpha1_odoo_enterprise.yaml
+- odoo_v1alpha1_odoo_custom_modules.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

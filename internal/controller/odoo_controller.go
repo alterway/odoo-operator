@@ -230,68 +230,93 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 	}
 
-	// --- ENTERPRISE SETUP ---
+	// --- ADDONS DOWNLOAD & SETUP ---
+	var repositoriesToClone []odoov1alpha1.GitRepositorySpec
+	var requiredSSHSecrets []string
+
+	// Add Enterprise repo if enabled
 	if odoo.Spec.Enterprise.Enabled {
-		if odoo.Spec.Enterprise.SSHKeySecretRef == "" {
-			err := fmt.Errorf("SSHKeySecretRef is required when Enterprise is enabled")
-			log.Error(err, "Validation Error")
-			return ctrl.Result{}, err
+		repoURL := odoo.Spec.Enterprise.RepositoryURL
+		if repoURL == "" {
+			repoURL = "git@github.com:odoo/enterprise.git"
 		}
 
-		// Check for SSH Secret existence
-		sshSecret := &corev1.Secret{}
-		err = r.Get(ctx, types.NamespacedName{Name: odoo.Spec.Enterprise.SSHKeySecretRef, Namespace: odoo.Namespace}, sshSecret)
-		if err != nil {
-			log.Error(err, "Failed to get SSH Key Secret for Enterprise")
-			return ctrl.Result{}, err
+		repositoriesToClone = append(repositoriesToClone, odoov1alpha1.GitRepositorySpec{
+			Name:            "enterprise",
+			URL:             repoURL,
+			Version:         odoo.Spec.Enterprise.Version,
+			SSHKeySecretRef: odoo.Spec.Enterprise.SSHKeySecretRef,
+		})
+		if odoo.Spec.Enterprise.SSHKeySecretRef != "" && indexOf(requiredSSHSecrets, odoo.Spec.Enterprise.SSHKeySecretRef) == -1 {
+			requiredSSHSecrets = append(requiredSSHSecrets, odoo.Spec.Enterprise.SSHKeySecretRef)
+		}
+	}
+
+	// Add custom repositories
+	for _, customRepo := range odoo.Spec.Modules.Repositories {
+		repositoriesToClone = append(repositoriesToClone, customRepo)
+		if customRepo.SSHKeySecretRef != "" && indexOf(requiredSSHSecrets, customRepo.SSHKeySecretRef) == -1 {
+			requiredSSHSecrets = append(requiredSSHSecrets, customRepo.SSHKeySecretRef)
+		}
+	}
+
+	// If there are repositories to clone, manage the download job
+	if len(repositoriesToClone) > 0 {
+		// Verify all required SSH secrets exist
+		for _, secretNameIter := range requiredSSHSecrets {
+			sshSecret := &corev1.Secret{}
+			err = r.Get(ctx, types.NamespacedName{Name: secretNameIter, Namespace: odoo.Namespace}, sshSecret)
+			if err != nil {
+				log.Error(err, "Failed to get SSH Key Secret for custom repository", "Secret.Name", secretNameIter)
+				return ctrl.Result{}, err
+			}
 		}
 
-		// Manage Enterprise Init Job
-		entJobName := odoo.Name + "-enterprise-init"
-		entJob := &batchv1.Job{}
-		err = r.Get(ctx, types.NamespacedName{Name: entJobName, Namespace: odoo.Namespace}, entJob)
+		addonsJobName := odoo.Name + "-addons-download-job"
+		addonsJob := &batchv1.Job{}
+		err = r.Get(ctx, types.NamespacedName{Name: addonsJobName, Namespace: odoo.Namespace}, addonsJob)
 
 		if err != nil && errors.IsNotFound(err) {
-			job := r.jobForEnterpriseDownload(odoo)
-			log.Info("Creating Enterprise Download Job", "Job.Namespace", job.Namespace, "Job.Name", job.Name)
+			job := r.jobForAddonsDownload(odoo, repositoriesToClone, requiredSSHSecrets)
+			log.Info("Creating Addons Download Job", "Job.Namespace", job.Namespace, "Job.Name", job.Name)
 			if err := r.Create(ctx, job); err != nil {
-				log.Error(err, "Failed to create Enterprise Download Job")
+				log.Error(err, "Failed to create Addons Download Job")
 				return ctrl.Result{}, err
 			}
 			r.setOdooCondition(&odoo.Status, metav1.Condition{
 				Type:    "Available",
 				Status:  metav1.ConditionFalse,
-				Reason:  "EnterpriseInitializing",
-				Message: "Downloading Enterprise modules...",
+				Reason:  "AddonsInitializing",
+				Message: "Downloading custom/enterprise modules...",
 			})
 			if err := r.Status().Update(ctx, odoo); err != nil {
-				log.Error(err, "Failed to update status for Enterprise Init")
+				log.Error(err, "Failed to update status for Addons Init")
 			}
 			return ctrl.Result{Requeue: true}, nil
 		} else if err != nil {
-			log.Error(err, "Failed to get Enterprise Download Job")
+			log.Error(err, "Failed to get Addons Download Job")
 			return ctrl.Result{}, err
 		}
 
-		if entJob.Status.Succeeded == 0 {
-			if entJob.Status.Failed > 0 {
-				log.Error(fmt.Errorf("Enterprise Download Job failed"), "Job.Name", entJobName)
+		if addonsJob.Status.Succeeded == 0 {
+			if addonsJob.Status.Failed > 0 {
+				log.Error(fmt.Errorf("Addons Download Job failed"), "Job.Name", addonsJobName)
 				r.setOdooCondition(&odoo.Status, metav1.Condition{
 					Type:    "Available",
 					Status:  metav1.ConditionFalse,
-					Reason:  "EnterpriseInitFailed",
-					Message: "Failed to download Enterprise modules.",
+					Reason:  "AddonsInitFailed",
+					Message: "Failed to download custom/enterprise modules.",
 				})
 				if err := r.Status().Update(ctx, odoo); err != nil {
-					log.Error(err, "Failed to update status for Enterprise failure")
+					log.Error(err, "Failed to update status for Addons failure")
 				}
-				return ctrl.Result{}, fmt.Errorf("enterprise download job failed")
+				return ctrl.Result{}, fmt.Errorf("addons download job failed")
 			}
-			log.Info("Enterprise Download Job is still running", "Job.Name", entJobName)
+			log.Info("Addons Download Job is still running", "Job.Name", addonsJobName)
 			return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 		}
 		// Job succeeded, proceed.
-		log.Info("Enterprise Download Job completed successfully")
+		log.Info("Addons Download Job completed successfully")
 	}
 
 	// Create the ConfigMap if it doesn't exist
@@ -840,10 +865,10 @@ func (r *OdooReconciler) jobForOdooInit(odoo *odoov1alpha1.Odoo, dbHost, secretN
 	}
 	odooImage := fmt.Sprintf("odoo:%s", odooVersion)
 
-	// Define environment variables from secret
-	envFromSecret := []corev1.EnvVar{
-		{Name: "POSTGRES_USER", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "user"}}},
-		{Name: "POSTGRES_PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "password"}}},
+	// Build modules to install string
+	modulesToInstall := ""
+	if len(odoo.Spec.Modules.Install) > 0 {
+		modulesToInstall = "," + strings.Join(odoo.Spec.Modules.Install, ",")
 	}
 
 	job := &batchv1.Job{
@@ -889,13 +914,15 @@ func (r *OdooReconciler) jobForOdooInit(odoo *odoov1alpha1.Odoo, dbHost, secretN
 							Name:  "odoo-db-init",
 							Image: odooImage,
 							Command: []string{"sh", "-c",
-								"odoo -c /etc/odoo/odoo.conf -d $POSTGRES_DB -i base --stop-after-init -w $POSTGRES_PASSWORD -r $POSTGRES_USER",
+								fmt.Sprintf("odoo -c /etc/odoo/odoo.conf -d $POSTGRES_DB -i base%s --stop-after-init -w $POSTGRES_PASSWORD -r $POSTGRES_USER", modulesToInstall),
 							},
 							Resources: odoo.Spec.Resources.Init,
-							Env: append([]corev1.EnvVar{
+							Env: []corev1.EnvVar{
 								{Name: "HOST", Value: dbHost},
+								{Name: "POSTGRES_USER", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "user"}}},
+								{Name: "POSTGRES_PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "password"}}},
 								{Name: "POSTGRES_DB", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "dbname"}}},
-							}, envFromSecret...),
+							},
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "odoo-data", MountPath: "/var/lib/odoo"},
 								{Name: "odoo-config", MountPath: "/etc/odoo/odoo.conf", SubPath: "odoo.conf"},
@@ -945,15 +972,14 @@ func (r *OdooReconciler) jobForOdooUpgrade(odoo *odoov1alpha1.Odoo, dbHost, secr
 	}
 	odooImage := fmt.Sprintf("odoo:%s", odooVersion)
 
-	// Define environment variables from secret
-	envFromSecret := []corev1.EnvVar{
-		{Name: "POSTGRES_USER", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "user"}}},
-		{Name: "POSTGRES_PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "password"}}},
-	}
-
-	modules := odoo.Spec.Upgrade.Modules
-	if modules == "" {
-		modules = "all"
+	modulesToUpgrade := odoo.Spec.Upgrade.Modules // Use specific upgrade modules if defined
+	if modulesToUpgrade == "" {
+		// Fallback to install list for upgrade if no specific upgrade modules are provided
+		if len(odoo.Spec.Modules.Install) > 0 {
+			modulesToUpgrade = strings.Join(odoo.Spec.Modules.Install, ",")
+		} else {
+			modulesToUpgrade = "all" // Default to all if nothing specified
+		}
 	}
 
 	// Generate a deterministic name for the upgrade job based on version
@@ -996,13 +1022,15 @@ func (r *OdooReconciler) jobForOdooUpgrade(odoo *odoov1alpha1.Odoo, dbHost, secr
 							Name:  "odoo-upgrade",
 							Image: odooImage,
 							Command: []string{"sh", "-c",
-								fmt.Sprintf("odoo -c /etc/odoo/odoo.conf -d $POSTGRES_DB -u %s --stop-after-init -w $POSTGRES_PASSWORD -r $POSTGRES_USER", modules),
+								fmt.Sprintf("odoo -c /etc/odoo/odoo.conf -d $POSTGRES_DB -u %s --stop-after-init -w $POSTGRES_PASSWORD -r $POSTGRES_USER", modulesToUpgrade),
 							},
 							Resources: odoo.Spec.Resources.Init, // Reuse init resources or add dedicated ones
-							Env: append([]corev1.EnvVar{
+							Env: []corev1.EnvVar{
 								{Name: "HOST", Value: dbHost},
+								{Name: "POSTGRES_USER", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "user"}}},
+								{Name: "POSTGRES_PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "password"}}},
 								{Name: "POSTGRES_DB", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "dbname"}}},
-							}, envFromSecret...),
+							},
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "odoo-data", MountPath: "/var/lib/odoo"},
 								{Name: "odoo-config", MountPath: "/etc/odoo/odoo.conf", SubPath: "odoo.conf"},
@@ -1043,44 +1071,98 @@ func (r *OdooReconciler) jobForOdooUpgrade(odoo *odoov1alpha1.Odoo, dbHost, secr
 	return job
 }
 
-func (r *OdooReconciler) jobForEnterpriseDownload(odoo *odoov1alpha1.Odoo) *batchv1.Job {
+func (r *OdooReconciler) jobForAddonsDownload(odoo *odoov1alpha1.Odoo, repositories []odoov1alpha1.GitRepositorySpec, sshSecrets []string) *batchv1.Job {
 	ls := labelsForOdoo(odoo.Name)
-	jobName := odoo.Name + "-enterprise-init"
+	jobName := odoo.Name + "-addons-download-job"
 
-	repoURL := odoo.Spec.Enterprise.RepositoryURL
-	if repoURL == "" {
-		repoURL = "git@github.com:odoo/enterprise.git"
+	var scriptBuilder strings.Builder
+	scriptBuilder.WriteString("#!/bin/sh\nset -e\n\n")
+
+	// Setup SSH for all provided secrets
+	scriptBuilder.WriteString("mkdir -p /root/.ssh\n")
+	scriptBuilder.WriteString("chmod 700 /root/.ssh\n")
+	scriptBuilder.WriteString("echo \"StrictHostKeyChecking no\" >> /root/.ssh/config\n")
+	for i := range sshSecrets {
+		// Mount path for each secret is unique, /etc/ssh-key-<index>
+		scriptBuilder.WriteString(fmt.Sprintf("cp /etc/ssh-key-%d/ssh-privatekey /root/.ssh/id_rsa_%d\n", i, i))
+		scriptBuilder.WriteString(fmt.Sprintf("chmod 600 /root/.ssh/id_rsa_%d\n", i))
+		scriptBuilder.WriteString(fmt.Sprintf("echo \"IdentityFile /root/.ssh/id_rsa_%d\" >> /root/.ssh/config\n", i))
 	}
+	scriptBuilder.WriteString("\n")
 
-	targetVersion := odoo.Spec.Enterprise.Version
-	if targetVersion == "" {
-		targetVersion = odoo.Spec.Version
-		if targetVersion == "" {
-			targetVersion = "19"
+	// Loop through repositories and clone/update
+	for _, repo := range repositories {
+		repoVersion := repo.Version
+		if repoVersion == "" {
+			repoVersion = "main" // Default to main branch for custom repos
+			// If Enterprise and version is empty, default to Odoo Spec.Version
+			if repo.Name == "enterprise" && odoo.Spec.Version != "" {
+				repoVersion = odoo.Spec.Version
+			}
 		}
-	}
 
-	// Script to clone or update the repo
-	// We clone into a subdirectory 'enterprise'
-	script := fmt.Sprintf(`
-mkdir -p /root/.ssh
-cp /etc/ssh-key/ssh-privatekey /root/.ssh/id_rsa
-chmod 600 /root/.ssh/id_rsa
-echo "StrictHostKeyChecking no" >> /root/.ssh/config
+		// Determine if it's an SSH URL for adding to known_hosts
+		isSSH := strings.HasPrefix(repo.URL, "git@")
+		if isSSH {
+			host := strings.Split(strings.Split(repo.URL, "@")[1], ":")[0]
+			scriptBuilder.WriteString(fmt.Sprintf("ssh-keyscan %s >> /root/.ssh/known_hosts\n", host))
+		}
 
-TARGET_DIR="/mnt/extra-addons/enterprise"
+		scriptBuilder.WriteString(fmt.Sprintf(`
+TARGET_DIR="/mnt/extra-addons/%s" # Each repo gets its own subdirectory
 
 if [ -d "$TARGET_DIR/.git" ]; then
-    echo "Enterprise repo exists, updating..."
+    echo "Repo %s exists, updating..."
     cd "$TARGET_DIR"
+    git config core.sshCommand "ssh -i /root/.ssh/id_rsa_%d"
     git fetch origin
     git checkout "%s"
     git pull origin "%s"
 else
-    echo "Cloning Enterprise repo..."
+    echo "Cloning repo %s..."
+    git config core.sshCommand "ssh -i /root/.ssh/id_rsa_%d"
     git clone -b "%s" "%s" "$TARGET_DIR"
 fi
-`, targetVersion, targetVersion, targetVersion, repoURL)
+
+`, repo.Name, repo.Name, indexOf(sshSecrets, repo.SSHKeySecretRef), repoVersion, repoVersion, repo.Name, indexOf(sshSecrets, repo.SSHKeySecretRef), repoVersion, repo.URL))
+	}
+
+	// VolumeMounts for addons PVC
+	volumeMounts := []corev1.VolumeMount{
+		{Name: "odoo-addons-all", MountPath: "/mnt/extra-addons"},
+	}
+
+	// Volumes for addons PVC and SSH secrets
+	volumes := []corev1.Volume{
+		{
+			Name: "odoo-addons-all",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: odoo.Name + "-addons-pvc",
+				},
+			},
+		},
+	}
+
+	// Add SSH secrets to volumes and volume mounts
+	for i, secretName := range sshSecrets {
+		volumes = append(volumes, corev1.Volume{
+			Name: fmt.Sprintf("ssh-key-%d", i),
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: secretName,
+					Items: []corev1.KeyToPath{
+						{Key: "ssh-privatekey", Path: "ssh-privatekey"},
+					},
+				},
+			},
+		})
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      fmt.Sprintf("ssh-key-%d", i),
+			MountPath: fmt.Sprintf("/etc/ssh-key-%d", i),
+			ReadOnly:  true,
+		})
+	}
 
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1095,38 +1177,28 @@ fi
 				},
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyOnFailure,
+					// Ensure PodSecurityContext is set for Restricted
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsNonRoot:   func() *bool { b := true; return &b }(),
+						RunAsUser:      func() *int64 { i := int64(1000); return &i }(), // Non-root user
+						FSGroup:        func() *int64 { i := int64(1000); return &i }(),
+						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+					},
 					Containers: []corev1.Container{
 						{
-							Name:    "git-clone",
-							Image:   "alpine/git",
-							Command: []string{"/bin/sh", "-c", script},
-							VolumeMounts: []corev1.VolumeMount{
-								{Name: "odoo-addons-all", MountPath: "/mnt/extra-addons"},
-								{Name: "ssh-key", MountPath: "/etc/ssh-key", ReadOnly: true},
+							Name:         "git-clone",
+							Image:        "alpine/git", // A lightweight image with git
+							Command:      []string{"/bin/sh", "-c", scriptBuilder.String()},
+							VolumeMounts: volumeMounts,
+							// Reuse init resources for addons download job
+							Resources: odoo.Spec.Resources.Init,
+							SecurityContext: &corev1.SecurityContext{
+								AllowPrivilegeEscalation: func() *bool { b := false; return &b }(),
+								Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 							},
 						},
 					},
-					Volumes: []corev1.Volume{
-						{
-							Name: "odoo-addons-all",
-							VolumeSource: corev1.VolumeSource{
-								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-									ClaimName: odoo.Name + "-addons-pvc",
-								},
-							},
-						},
-						{
-							Name: "ssh-key",
-							VolumeSource: corev1.VolumeSource{
-								Secret: &corev1.SecretVolumeSource{
-									SecretName: odoo.Spec.Enterprise.SSHKeySecretRef,
-									Items: []corev1.KeyToPath{
-										{Key: "ssh-privatekey", Path: "ssh-privatekey"},
-									},
-								},
-							},
-						},
-					},
+					Volumes: volumes,
 				},
 			},
 		},
@@ -1136,12 +1208,22 @@ fi
 	return job
 }
 
+// indexOf is a helper to find the index of a string in a slice.
+func indexOf(slice []string, item string) int {
+	for i, v := range slice {
+		if v == item {
+			return i
+		}
+	}
+	return -1
+}
+
 func (r *OdooReconciler) configMapForOdoo(odoo *odoov1alpha1.Odoo, dbHost string) *corev1.ConfigMap {
 	ls := labelsForOdoo(odoo.Name)
 
 	// Start with default options
 	options := map[string]string{
-		"addons_path":       "/mnt/extra-addons/enterprise-addons,/mnt/extra-addons/custom-addons,/usr/lib/python3/dist-packages/",
+		// "addons_path" will be generated dynamically
 		"data_dir":          "/var/lib/odoo",
 		"admin_passwd":      "admin_password", // Consider making this configurable via a secret
 		"db_maxconn":        "64",
@@ -1160,6 +1242,22 @@ func (r *OdooReconciler) configMapForOdoo(odoo *odoov1alpha1.Odoo, dbHost string
 		"max_cron_threads": "2",
 		"workers":          "0",
 	}
+
+	// Dynamically build addons_path
+	var addonsPathParts []string
+	addonsPathParts = append(addonsPathParts, "/usr/lib/python3/dist-packages/")
+
+	// Add Enterprise path if enabled
+	if odoo.Spec.Enterprise.Enabled {
+		addonsPathParts = append(addonsPathParts, "/mnt/extra-addons/enterprise")
+	}
+
+	// Add custom repositories paths
+	for _, repo := range odoo.Spec.Modules.Repositories {
+		addonsPathParts = append(addonsPathParts, fmt.Sprintf("/mnt/extra-addons/%s", repo.Name))
+	}
+
+	options["addons_path"] = strings.Join(addonsPathParts, ",")
 
 	// Add database options
 	options["db_host"] = dbHost

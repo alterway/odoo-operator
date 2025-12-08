@@ -133,6 +133,52 @@ spec:
                       If set to false, Odoo will log to stdout.
                     type: boolean
                 type: object
+              modules:
+                description: Modules defines the Odoo modules configuration.
+                properties:
+                  install:
+                    description: |-
+                      Install is a list of Odoo modules to install/update at initialization/upgrade.
+                      Example: ["sale", "crm", "account"]
+                      These modules must be available in the Odoo image or in configured repositories.
+                    items:
+                      type: string
+                    type: array
+                  repositories:
+                    description: |-
+                      Repositories defines additional Git repositories to clone into the addons volume.
+                      Useful for custom or community modules not bundled with the Odoo image.
+                      These repositories will be cloned into /mnt/extra-addons/<repository.Name>.
+                    items:
+                      description: GitRepositorySpec defines details for cloning a
+                        Git repository.
+                      properties:
+                        name:
+                          description: Name is the name of the subdirectory within
+                            /mnt/extra-addons where the repository will be cloned.
+                          type: string
+                        sshKeySecretRef:
+                          description: |-
+                            SSHKeySecretRef is the name of the secret containing the SSH private key
+                            for authentication with the git repository.
+                            The key must be stored under the key 'ssh-privatekey'.
+                            This is only used for SSH URLs.
+                          type: string
+                        url:
+                          description: URL is the Git URL of the repository (e.g.,
+                            "https://github.com/my-org/my-addons.git").
+                          type: string
+                        version:
+                          description: |-
+                            Version is the git reference (branch, tag, or commit) to checkout.
+                            Defaults to "master" or "main" if not specified.
+                          type: string
+                      required:
+                      - name
+                      - url
+                      type: object
+                    type: array
+                type: object
               options:
                 additionalProperties:
                   type: string

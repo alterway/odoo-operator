@@ -443,13 +443,13 @@ var _ = Describe("Odoo Controller", func() {
 				k8sClient.Delete(ctx, secret)
 			}
 			job := &batchv1.Job{}
-			err = k8sClient.Get(ctx, types.NamespacedName{Name: resourceName + "-enterprise-init", Namespace: "default"}, job)
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: resourceName + "-addons-download-job", Namespace: "default"}, job)
 			if err == nil {
 				k8sClient.Delete(ctx, job)
 			}
 		})
 
-		It("should create an enterprise download job", func() {
+		It("should create an addons download job", func() {
 			controllerReconciler := &OdooReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
@@ -457,7 +457,7 @@ var _ = Describe("Odoo Controller", func() {
 
 			// Run reconcile until Job is created (need multiple passes for PVCs etc.)
 			entJob := &batchv1.Job{}
-			entJobName := resourceName + "-enterprise-init"
+			entJobName := resourceName + "-addons-download-job"
 
 			Eventually(func() error {
 				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
@@ -465,13 +465,13 @@ var _ = Describe("Odoo Controller", func() {
 					return err
 				}
 				return k8sClient.Get(ctx, types.NamespacedName{Name: entJobName, Namespace: "default"}, entJob)
-			}, "10s", "1s").Should(Succeed(), "Enterprise Job should be created")
+			}, "10s", "1s").Should(Succeed(), "Addons Job should be created")
 
 			// Check mounts
 			foundSSH := false
 			foundAddons := false
 			for _, vol := range entJob.Spec.Template.Spec.Volumes {
-				if vol.Name == "ssh-key" {
+				if vol.Name == "ssh-key-0" {
 					foundSSH = true
 					Expect(vol.Secret.SecretName).To(Equal("ssh-key-secret"))
 				}

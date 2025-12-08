@@ -1,0 +1,57 @@
+apiVersion: cloud.alterway.fr/v1alpha1
+kind: Odoo
+metadata:
+  name: odoo-custom-modules-sample
+spec:
+  size: 1
+  version: "16.0"
+  
+  # Configuration des modules à installer
+  modules:
+    install:
+      - sale_management
+      - project
+      - my_custom_module # Module présent dans le repo custom ci-dessous
+    
+    repositories:
+      - name: custom-addons # Sera cloné dans /mnt/extra-addons/custom-addons
+        url: https://github.com/my-org/my-odoo-modules.git
+        version: main
+        # sshKeySecretRef: my-ssh-key # Optionnel si repo privé
+
+  service:
+    type: ClusterIP
+  
+  logs:
+    volumeEnabled: false
+
+  storage:
+    data:
+      size: "5Gi"
+      accessMode: ReadWriteOnce
+    addons:
+      size: "5Gi"
+      accessMode: ReadWriteOnce
+
+  resources:
+    odoo:
+      requests:
+        cpu: "500m"
+        memory: "512Mi"
+      limits:
+        cpu: "1000m"
+        memory: "1Gi"
+    postgres:
+      requests:
+        cpu: "250m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+    init:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "200m"
+        memory: "256Mi"
