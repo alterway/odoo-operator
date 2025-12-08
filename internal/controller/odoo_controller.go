@@ -968,7 +968,7 @@ func (r *OdooReconciler) statefulSetForOdoo(odoo *odoov1alpha1.Odoo, dbHost, sec
 		// Add to odoo container
 		dep.Spec.Template.Spec.Containers[0].VolumeMounts = append(dep.Spec.Template.Spec.Containers[0].VolumeMounts, logVolumeMount)
 	}
-	ctrl.SetControllerReference(odoo, dep, r.Scheme)
+	_ = ctrl.SetControllerReference(odoo, dep, r.Scheme)
 	return dep
 }
 
@@ -1075,7 +1075,7 @@ func (r *OdooReconciler) jobForOdooInit(odoo *odoov1alpha1.Odoo, dbHost, secretN
 		job.Spec.Template.Spec.Containers[0].VolumeMounts = append(job.Spec.Template.Spec.Containers[0].VolumeMounts, logVolumeMount)
 	}
 
-	ctrl.SetControllerReference(odoo, job, r.Scheme)
+	_ = ctrl.SetControllerReference(odoo, job, r.Scheme)
 	return job
 }
 
@@ -1183,7 +1183,7 @@ func (r *OdooReconciler) jobForOdooUpgrade(odoo *odoov1alpha1.Odoo, dbHost, secr
 		job.Spec.Template.Spec.Containers[0].VolumeMounts = append(job.Spec.Template.Spec.Containers[0].VolumeMounts, logVolumeMount)
 	}
 
-	ctrl.SetControllerReference(odoo, job, r.Scheme)
+	_ = ctrl.SetControllerReference(odoo, job, r.Scheme)
 	return job
 }
 
@@ -1285,7 +1285,7 @@ func (r *OdooReconciler) jobForModulesUpdate(odoo *odoov1alpha1.Odoo, dbHost, se
 		job.Spec.Template.Spec.Containers[0].VolumeMounts = append(job.Spec.Template.Spec.Containers[0].VolumeMounts, logVolumeMount)
 	}
 
-	ctrl.SetControllerReference(odoo, job, r.Scheme)
+	_ = ctrl.SetControllerReference(odoo, job, r.Scheme)
 	return job
 }
 
@@ -1422,7 +1422,7 @@ fi
 		},
 	}
 
-	ctrl.SetControllerReference(odoo, job, r.Scheme)
+	_ = ctrl.SetControllerReference(odoo, job, r.Scheme)
 	return job
 }
 
@@ -1514,7 +1514,7 @@ func (r *OdooReconciler) configMapForOdoo(odoo *odoov1alpha1.Odoo, dbHost string
 		},
 	}
 
-	ctrl.SetControllerReference(odoo, cm, r.Scheme)
+	_ = ctrl.SetControllerReference(odoo, cm, r.Scheme)
 	return cm
 }
 
@@ -1565,7 +1565,7 @@ func (r *OdooReconciler) pvcForOdoo(odoo *odoov1alpha1.Odoo, name string) *corev
 		pvc.Spec.StorageClassName = &storageSpec.StorageClassName
 	}
 
-	ctrl.SetControllerReference(odoo, pvc, r.Scheme)
+	_ = ctrl.SetControllerReference(odoo, pvc, r.Scheme)
 	return pvc
 }
 
@@ -1583,7 +1583,7 @@ func (r *OdooReconciler) secretForPostgres(odoo *odoov1alpha1.Odoo, name string)
 			"dbname":   "odoo",
 		},
 	}
-	ctrl.SetControllerReference(odoo, secret, r.Scheme)
+	_ = ctrl.SetControllerReference(odoo, secret, r.Scheme)
 	return secret
 }
 
@@ -1602,7 +1602,7 @@ func (r *OdooReconciler) serviceForPostgres(odoo *odoov1alpha1.Odoo) *corev1.Ser
 			}},
 		},
 	}
-	ctrl.SetControllerReference(odoo, svc, r.Scheme)
+	_ = ctrl.SetControllerReference(odoo, svc, r.Scheme)
 	return svc
 }
 
@@ -1648,7 +1648,7 @@ func (r *OdooReconciler) serviceForOdoo(odoo *odoov1alpha1.Odoo, name string) *c
 		}
 	}
 
-	ctrl.SetControllerReference(odoo, svc, r.Scheme)
+	_ = ctrl.SetControllerReference(odoo, svc, r.Scheme)
 	return svc
 }
 
@@ -1753,7 +1753,7 @@ func (r *OdooReconciler) ingressForOdoo(odoo *odoov1alpha1.Odoo) *networkingv1.I
 		}
 	}
 
-	ctrl.SetControllerReference(odoo, ing, r.Scheme)
+	_ = ctrl.SetControllerReference(odoo, ing, r.Scheme)
 	return ing
 }
 
@@ -1787,7 +1787,7 @@ func (r *OdooReconciler) pvcForPostgres(odoo *odoov1alpha1.Odoo) *corev1.Persist
 		pvc.Spec.StorageClassName = &storageSpec.StorageClassName
 	}
 
-	ctrl.SetControllerReference(odoo, pvc, r.Scheme)
+	_ = ctrl.SetControllerReference(odoo, pvc, r.Scheme)
 	return pvc
 }
 
@@ -1859,7 +1859,7 @@ func (r *OdooReconciler) statefulSetForPostgres(odoo *odoov1alpha1.Odoo, secretN
 			},
 		},
 	}
-	ctrl.SetControllerReference(odoo, sts, r.Scheme)
+	_ = ctrl.SetControllerReference(odoo, sts, r.Scheme)
 	return sts
 }
 
