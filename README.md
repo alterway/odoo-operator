@@ -121,6 +121,41 @@ spec:
   restoreMethod: StopAndRestore # Will stop Odoo, restore DB, and restart
 ```
 
+### 5. High Availability with Redis
+
+To enable scalable session storage, you can configure Odoo to use Redis. The operator can manage a Redis instance for you or connect to an external one.
+
+**Managed Redis:**
+
+```yaml
+apiVersion: cloud.alterway.fr/v1alpha1
+kind: Odoo
+metadata:
+  name: odoo-ha
+spec:
+  version: "19"
+  size: 2 # Now you can scale Odoo!
+  redis:
+    enabled: true
+    managed: true
+```
+
+**External Redis:**
+
+```yaml
+apiVersion: cloud.alterway.fr/v1alpha1
+kind: Odoo
+metadata:
+  name: odoo-external-redis
+spec:
+  # ...
+  redis:
+    enabled: true
+    managed: false
+    host: "my-redis-service.default.svc.cluster.local"
+    port: 6379
+```
+
 ## Configuration Reference
 
 ### OdooSpec
@@ -132,6 +167,7 @@ spec:
 | `database` | External DB config. If empty, a managed Postgres is created. | - |
 | `enterprise` | Configuration for Enterprise edition (enabled, repo, key). | - |
 | `modules` | List of modules to install and external Git repositories. | - |
+| `redis` | Configuration for Redis session storage. | - |
 | `storage` | PVC configurations for data, logs, addons, and postgres. | - |
 | `resources` | Resource requests/limits for containers. | - |
 
