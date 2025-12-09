@@ -1693,7 +1693,7 @@ func (r *OdooReconciler) configMapForOdoo(odoo *odoov1alpha1.Odoo, dbHost string
 		},
 	}
 
-	ctrl.SetControllerReference(odoo, cm, r.Scheme)
+	_ = ctrl.SetControllerReference(odoo, cm, r.Scheme)
 	return cm
 }
 
@@ -1825,7 +1825,7 @@ func (r *OdooReconciler) serviceForOdoo(odoo *odoov1alpha1.Odoo, name string) *c
 		}
 	}
 
-	ctrl.SetControllerReference(odoo, svc, r.Scheme)
+	_ = ctrl.SetControllerReference(odoo, svc, r.Scheme)
 	return svc
 }
 
