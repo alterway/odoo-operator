@@ -281,13 +281,43 @@ func (r *OdooReconciler) reconcileRedis(ctx context.Context, odoo *odoov1alpha1.
 	isManaged := odoo.Spec.Redis.Managed == nil || *odoo.Spec.Redis.Managed
 
 	if !isManaged {
+
 		// External Redis
+
 		if odoo.Spec.Redis.Host == "" {
+
 			return "", 0, "", &ctrl.Result{}, fmt.Errorf("redis host must be provided when managed is false")
+
 		}
+
 		redisHost = odoo.Spec.Redis.Host
-		redisSecretName = odoo.Spec.Redis.SecretRef // User provides secret
+
+		if odoo.Spec.Redis.SecretRef != "" {
+
+			redisSecret := &corev1.Secret{}
+
+			err := r.Get(ctx, types.NamespacedName{Name: odoo.Spec.Redis.SecretRef, Namespace: odoo.Namespace}, redisSecret)
+
+			if err != nil {
+
+				log.Error(err, "Failed to get external Redis Secret", "Secret.Name", odoo.Spec.Redis.SecretRef)
+
+				return "", 0, "", &ctrl.Result{}, err
+
+			}
+
+			redisPassword = string(redisSecret.Data["password"])
+
+			if redisPassword == "" {
+
+				return "", 0, "", &ctrl.Result{}, fmt.Errorf("external redis secret %s is missing 'password' key", odoo.Spec.Redis.SecretRef)
+
+			}
+
+		}
+
 	} else {
+
 		// Managed Redis
 		redisHost = fmt.Sprintf("%s-redis-svc.%s.svc.cluster.local", odoo.Name, odoo.Namespace)
 		redisSecretName = odoo.Spec.Redis.SecretRef
@@ -1083,7 +1113,7 @@ func (r *OdooReconciler) statefulSetForOdoo(odoo *odoov1alpha1.Odoo, dbHost, sec
 		// Add to odoo container
 		dep.Spec.Template.Spec.Containers[0].VolumeMounts = append(dep.Spec.Template.Spec.Containers[0].VolumeMounts, logVolumeMount)
 	}
-	ctrl.SetControllerReference(odoo, dep, r.Scheme)
+	_ = ctrl.SetControllerReference(odoo, dep, r.Scheme)
 	return dep
 }
 
@@ -1190,7 +1220,7 @@ func (r *OdooReconciler) jobForOdooInit(odoo *odoov1alpha1.Odoo, dbHost, secretN
 		job.Spec.Template.Spec.Containers[0].VolumeMounts = append(job.Spec.Template.Spec.Containers[0].VolumeMounts, logVolumeMount)
 	}
 
-	ctrl.SetControllerReference(odoo, job, r.Scheme)
+	_ = ctrl.SetControllerReference(odoo, job, r.Scheme)
 	return job
 }
 
@@ -1298,7 +1328,7 @@ func (r *OdooReconciler) jobForOdooUpgrade(odoo *odoov1alpha1.Odoo, dbHost, secr
 		job.Spec.Template.Spec.Containers[0].VolumeMounts = append(job.Spec.Template.Spec.Containers[0].VolumeMounts, logVolumeMount)
 	}
 
-	ctrl.SetControllerReference(odoo, job, r.Scheme)
+	_ = ctrl.SetControllerReference(odoo, job, r.Scheme)
 	return job
 }
 
@@ -1400,7 +1430,7 @@ func (r *OdooReconciler) jobForModulesUpdate(odoo *odoov1alpha1.Odoo, dbHost, se
 		job.Spec.Template.Spec.Containers[0].VolumeMounts = append(job.Spec.Template.Spec.Containers[0].VolumeMounts, logVolumeMount)
 	}
 
-	ctrl.SetControllerReference(odoo, job, r.Scheme)
+	_ = ctrl.SetControllerReference(odoo, job, r.Scheme)
 	return job
 }
 
@@ -1537,7 +1567,7 @@ fi
 		},
 	}
 
-	ctrl.SetControllerReference(odoo, job, r.Scheme)
+	_ = ctrl.SetControllerReference(odoo, job, r.Scheme)
 	return job
 }
 
