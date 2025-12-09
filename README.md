@@ -148,15 +148,33 @@ kind: Odoo
 metadata:
   name: odoo-external-redis
 spec:
-  # ...
-  redis:
-    enabled: true
-    managed: false
-    host: "my-redis-service.default.svc.cluster.local"
-    port: 6379
-```
-
-## Configuration Reference
+      # ...
+    redis:
+      enabled: true
+      managed: false
+      host: "my-redis-service.default.svc.cluster.local"
+      port: 6379
+      secretRef: "my-redis-password" # Secret containing 'password' key
+      databaseIndex: 0
+      prefix: "odoo_prod"
+      isCacheEnabled: true
+      cacheDatabaseIndex: 1
+    options: # These options will be merged into odoo.conf. Password can be passed via env var or directly from secret.
+      session_store: redis
+      session_redis_host: my-redis-service.default.svc.cluster.local
+      session_redis_port: "6379"
+      session_redis_dbindex: "0"
+      session_redis_prefix: odoo_prod
+      session_redis_password: ${REDIS_PASSWORD} # Odoo will pick this up from environment variables if set in StatefulSet
+      
+      enable_redis: "True" # For cache (requires appropriate Odoo modules)
+      redis_host: my-redis-service.default.svc.cluster.local
+      redis_port: "6379"
+      redis_dbindex: "1"
+      redis_password: ${REDIS_PASSWORD}
+  ```
+  
+  **Note**: For external Redis, you must manually ensure that the `REDIS_PASSWORD` environment variable (or equivalent, depending on your Odoo image) is passed to the Odoo Pods, typically by referencing the `secretRef` in the Odoo StatefulSet configuration. When `redis.managed` is true, the operator handles this automatically.## Configuration Reference
 
 ### OdooSpec
 

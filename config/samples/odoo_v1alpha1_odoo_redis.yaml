@@ -1,0 +1,39 @@
+apiVersion: cloud.alterway.fr/v1alpha1
+kind: Odoo
+metadata:
+  name: odoo-redis-example
+  namespace: default
+spec:
+  version: "19"
+  size: 1
+  database:
+    # Use managed PostgreSQL for simplicity in this example
+    postgresVersion: "16" 
+  storage:
+    data:
+      size: "5Gi"
+    postgres:
+      size: "5Gi"
+  
+  # Configure Redis for session and cache storage
+  redis:
+    enabled: true
+    managed: true # Operator will deploy a Redis StatefulSet and Service
+    databaseIndex: 0 # Default for sessions
+    prefix: "odoo_prod"
+    isCacheEnabled: true
+    cacheDatabaseIndex: 1 # Separate DB for cache
+    resources: # Optional: define resources for the managed Redis instance
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+      limits:
+        memory: "256Mi"
+        cpu: "200m"
+  
+  service:
+    type: LoadBalancer
+  ingress:
+    enabled: true
+    host: odoo-redis.example.com
+    tls: true

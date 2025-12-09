@@ -1,9 +1,10 @@
 resources:
-- odoo_v1alpha1_odoo.yaml
+- cloud.alterway.fr_v1alpha1_odoobackup_s3.yaml
 - cloud.alterway.fr_v1alpha1_odoobackup.yaml
 - cloud.alterway.fr_v1alpha1_odoorestore.yaml
-- cloud.alterway.fr_v1alpha1_odoobackup_s3.yaml
-- odoo_v1alpha1_odoo_upgrade.yaml
-- odoo_v1alpha1_odoo_enterprise.yaml
 - odoo_v1alpha1_odoo_custom_modules.yaml
+- odoo_v1alpha1_odoo_enterprise.yaml
+- odoo_v1alpha1_odoo_upgrade.yaml
+- odoo_v1alpha1_odoo.yaml
+- odoo_v1alpha1_odoo_redis.yaml # New Redis example
 # +kubebuilder:scaffold:manifestskustomizesamples
