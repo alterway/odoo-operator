@@ -18,7 +18,9 @@ package controller
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -90,7 +92,7 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return *res, err
 	}
 
-	redisHost, redisPort, res, err := r.reconcileRedis(ctx, odoo)
+	redisHost, redisPort, redisPassword, res, err := r.reconcileRedis(ctx, odoo)
 	if res != nil || err != nil {
 		return *res, err
 	}
@@ -103,7 +105,7 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return *res, err
 	}
 
-	if res, err := r.reconcileConfigMap(ctx, odoo, dbHost, redisHost, redisPort); res != nil || err != nil {
+	if res, err := r.reconcileConfigMap(ctx, odoo, dbHost, redisHost, redisPort, redisPassword); res != nil || err != nil {
 		return *res, err
 	}
 
@@ -175,6 +177,7 @@ func (r *OdooReconciler) handleFinalizer(ctx context.Context, odoo *odoov1alpha1
 func (r *OdooReconciler) reconcileDatabase(ctx context.Context, odoo *odoov1alpha1.Odoo) (string, string, *ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	var dbHost, secretName string
+	var err error // Declare err here
 	isExternalDB := odoo.Spec.Database.Host != ""
 
 	if isExternalDB {
@@ -198,6 +201,7 @@ func (r *OdooReconciler) reconcileDatabase(ctx context.Context, odoo *odoov1alph
 					log.Error(err, "Failed to create PostgreSQL Secret")
 					return "", "", &ctrl.Result{}, err
 				}
+				_ = ctrl.SetControllerReference(odoo, sec, r.Scheme)
 				return "", "", &ctrl.Result{Requeue: true}, nil
 			} else if err != nil {
 				log.Error(err, "Failed to get PostgreSQL Secret")
@@ -206,7 +210,7 @@ func (r *OdooReconciler) reconcileDatabase(ctx context.Context, odoo *odoov1alph
 		}
 
 		pgPvc := &corev1.PersistentVolumeClaim{}
-		err := r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-postgres-pvc", Namespace: odoo.Namespace}, pgPvc)
+		err = r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-postgres-pvc", Namespace: odoo.Namespace}, pgPvc)
 		if err != nil && errors.IsNotFound(err) {
 			pvc := r.pvcForPostgres(odoo)
 			log.Info("Creating PostgreSQL PVC", "PVC.Namespace", pvc.Namespace, "PVC.Name", pvc.Name)
@@ -214,6 +218,7 @@ func (r *OdooReconciler) reconcileDatabase(ctx context.Context, odoo *odoov1alph
 				log.Error(err, "Failed to create PostgreSQL PVC")
 				return "", "", &ctrl.Result{}, err
 			}
+			_ = ctrl.SetControllerReference(odoo, pvc, r.Scheme)
 			return "", "", &ctrl.Result{Requeue: true}, nil
 		} else if err != nil {
 			log.Error(err, "Failed to get PostgreSQL PVC")
@@ -229,6 +234,7 @@ func (r *OdooReconciler) reconcileDatabase(ctx context.Context, odoo *odoov1alph
 				log.Error(err, "Failed to create PostgreSQL Service")
 				return "", "", &ctrl.Result{}, err
 			}
+			_ = ctrl.SetControllerReference(odoo, svc, r.Scheme)
 			return "", "", &ctrl.Result{Requeue: true}, nil
 		} else if err != nil {
 			log.Error(err, "Failed to get PostgreSQL Service")
@@ -244,6 +250,7 @@ func (r *OdooReconciler) reconcileDatabase(ctx context.Context, odoo *odoov1alph
 				log.Error(err, "Failed to create PostgreSQL StatefulSet")
 				return "", "", &ctrl.Result{}, err
 			}
+			_ = ctrl.SetControllerReference(odoo, sts, r.Scheme)
 			return "", "", &ctrl.Result{Requeue: true}, nil
 		} else if err != nil {
 			log.Error(err, "Failed to get PostgreSQL StatefulSet")
@@ -254,16 +261,18 @@ func (r *OdooReconciler) reconcileDatabase(ctx context.Context, odoo *odoov1alph
 }
 
 // reconcileRedis manages the Redis instance for session storage.
-// It returns the Redis host, port, and any reconciliation result/error.
-func (r *OdooReconciler) reconcileRedis(ctx context.Context, odoo *odoov1alpha1.Odoo) (string, int32, *ctrl.Result, error) {
+// It returns the Redis host, port, password (if any), and any reconciliation result/error.
+func (r *OdooReconciler) reconcileRedis(ctx context.Context, odoo *odoov1alpha1.Odoo) (string, int32, string, *ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
 	if !odoo.Spec.Redis.Enabled {
-		return "", 0, nil, nil
+		return "", 0, "", nil, nil
 	}
 
 	var redisHost string
 	var redisPort int32 = 6379
+	var redisPassword string
+	var redisSecretName string
 
 	if odoo.Spec.Redis.Port != 0 {
 		redisPort = odoo.Spec.Redis.Port
@@ -274,48 +283,77 @@ func (r *OdooReconciler) reconcileRedis(ctx context.Context, odoo *odoov1alpha1.
 	if !isManaged {
 		// External Redis
 		if odoo.Spec.Redis.Host == "" {
-			return "", 0, &ctrl.Result{}, fmt.Errorf("redis host must be provided when managed is false")
+			return "", 0, "", &ctrl.Result{}, fmt.Errorf("redis host must be provided when managed is false")
 		}
 		redisHost = odoo.Spec.Redis.Host
+		redisSecretName = odoo.Spec.Redis.SecretRef // User provides secret
 	} else {
 		// Managed Redis
 		redisHost = fmt.Sprintf("%s-redis-svc.%s.svc.cluster.local", odoo.Name, odoo.Namespace)
+		redisSecretName = odoo.Spec.Redis.SecretRef
+		if redisSecretName == "" {
+			redisSecretName = odoo.Name + "-redis-secret"
+		}
+
+		// Ensure Redis Secret exists (generate if not provided)
+		redisSecret := &corev1.Secret{}
+		err := r.Get(ctx, types.NamespacedName{Name: redisSecretName, Namespace: odoo.Namespace}, redisSecret)
+		if err != nil && errors.IsNotFound(err) {
+			// Generate a random password
+			password := generateRandomPassword(32) // Helper to create a random password
+			sec := r.secretForRedis(odoo, redisSecretName, password)
+			log.Info("Creating Redis Secret", "Secret.Namespace", sec.Namespace, "Secret.Name", sec.Name)
+			if err := r.Create(ctx, sec); err != nil {
+				log.Error(err, "Failed to create Redis Secret")
+				return "", 0, "", &ctrl.Result{}, err
+			}
+			_ = ctrl.SetControllerReference(odoo, sec, r.Scheme)
+			return "", 0, "", &ctrl.Result{Requeue: true}, nil
+		} else if err != nil {
+			log.Error(err, "Failed to get Redis Secret")
+			return "", 0, "", &ctrl.Result{}, err
+		}
+		// If secret exists, get the password
+		redisPassword = string(redisSecret.Data["password"])
+		if redisPassword == "" {
+			return "", 0, "", &ctrl.Result{}, fmt.Errorf("redis secret %s is missing 'password' key", redisSecretName)
+		}
 
 		// Ensure Redis Service exists
 		redisSvc := &corev1.Service{}
-		err := r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-redis-svc", Namespace: odoo.Namespace}, redisSvc)
+		err = r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-redis-svc", Namespace: odoo.Namespace}, redisSvc)
 		if err != nil && errors.IsNotFound(err) {
 			svc := r.serviceForRedis(odoo)
 			log.Info("Creating Redis Service", "Service.Namespace", svc.Namespace, "Service.Name", svc.Name)
 			if err := r.Create(ctx, svc); err != nil {
 				log.Error(err, "Failed to create Redis Service")
-				return "", 0, &ctrl.Result{}, err
+				return "", 0, "", &ctrl.Result{}, err
 			}
 			_ = ctrl.SetControllerReference(odoo, svc, r.Scheme)
-			return "", 0, &ctrl.Result{Requeue: true}, nil
+			return "", 0, "", &ctrl.Result{Requeue: true}, nil
 		} else if err != nil {
 			log.Error(err, "Failed to get Redis Service")
-			return "", 0, &ctrl.Result{}, err
+			return "", 0, "", &ctrl.Result{}, err
 		}
 
 		// Ensure Redis StatefulSet exists
 		redisSts := &appsv1.StatefulSet{}
 		err = r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-redis", Namespace: odoo.Namespace}, redisSts)
 		if err != nil && errors.IsNotFound(err) {
-			sts := r.statefulSetForRedis(odoo)
+			sts := r.statefulSetForRedis(odoo, redisSecretName) // Pass secret name
 			log.Info("Creating Redis StatefulSet", "StatefulSet.Namespace", sts.Namespace, "StatefulSet.Name", sts.Name)
 			if err := r.Create(ctx, sts); err != nil {
 				log.Error(err, "Failed to create Redis StatefulSet")
-				return "", 0, &ctrl.Result{}, err
+				return "", 0, "", &ctrl.Result{}, err
 			}
 			_ = ctrl.SetControllerReference(odoo, sts, r.Scheme)
-			return "", 0, &ctrl.Result{Requeue: true}, nil
+			return "", 0, "", &ctrl.Result{Requeue: true}, nil
 		} else if err != nil {
 			log.Error(err, "Failed to get Redis StatefulSet")
-			return "", 0, &ctrl.Result{}, err
+			return "", 0, "", &ctrl.Result{}, err
 		}
 	}
-	return redisHost, redisPort, nil, nil
+	return redisHost, redisPort, redisPassword, nil, nil
 }
 
 // reconcilePVCs manages the creation of data and addons PVCs for Odoo.
@@ -332,6 +370,7 @@ func (r *OdooReconciler) reconcilePVCs(ctx context.Context, odoo *odoov1alpha1.O
 				log.Error(err, "Failed to create new PVC", "PVC.Namespace", pvc.Namespace, "PVC.Name", pvc.Name)
 				return &ctrl.Result{}, err
 			}
+			_ = ctrl.SetControllerReference(odoo, pvc, r.Scheme)
 			return &ctrl.Result{Requeue: true}, nil
 		} else if err != nil {
 			log.Error(err, "Failed to get PVC")
@@ -402,6 +441,7 @@ func (r *OdooReconciler) reconcileAddonsDownload(ctx context.Context, odoo *odoo
 			if err := r.Status().Update(ctx, odoo); err != nil {
 				log.Error(err, "Failed to update status for Addons Init")
 			}
+			_ = ctrl.SetControllerReference(odoo, job, r.Scheme)
 			return &ctrl.Result{Requeue: true}, nil
 		} else if err != nil {
 			log.Error(err, "Failed to get Addons Download Job")
@@ -431,18 +471,19 @@ func (r *OdooReconciler) reconcileAddonsDownload(ctx context.Context, odoo *odoo
 }
 
 // reconcileConfigMap manages the creation and update of the Odoo ConfigMap.
-func (r *OdooReconciler) reconcileConfigMap(ctx context.Context, odoo *odoov1alpha1.Odoo, dbHost string, redisHost string, redisPort int32) (*ctrl.Result, error) {
+func (r *OdooReconciler) reconcileConfigMap(ctx context.Context, odoo *odoov1alpha1.Odoo, dbHost string, redisHost string, redisPort int32, redisPassword string) (*ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	cm := &corev1.ConfigMap{}
 	err := r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-config", Namespace: odoo.Namespace}, cm)
 	if err != nil && errors.IsNotFound(err) {
-		dep := r.configMapForOdoo(odoo, dbHost, redisHost, redisPort)
+		dep := r.configMapForOdoo(odoo, dbHost, redisHost, redisPort, redisPassword)
 		log.Info("Creating a new ConfigMap", "ConfigMap.Namespace", dep.Namespace, "ConfigMap.Name", dep.Name)
 		err = r.Create(ctx, dep)
 		if err != nil {
 			log.Error(err, "Failed to create new ConfigMap", "ConfigMap.Namespace", dep.Namespace, "ConfigMap.Name", dep.Name)
 			return &ctrl.Result{}, err
 		}
+		_ = ctrl.SetControllerReference(odoo, dep, r.Scheme)
 		return &ctrl.Result{Requeue: true}, nil
 	} else if err != nil {
 		log.Error(err, "Failed to get ConfigMap")
@@ -482,6 +523,7 @@ func (r *OdooReconciler) reconcileInitJob(ctx context.Context, odoo *odoov1alpha
 		}
 
 		log.Info("DB initialization Job created, requeuing.")
+		_ = ctrl.SetControllerReference(odoo, job, r.Scheme)
 		return &ctrl.Result{Requeue: true}, nil
 
 	} else if err != nil {
@@ -543,8 +585,6 @@ func (r *OdooReconciler) reconcileUpgrade(ctx context.Context, odoo *odoov1alpha
 			initialHash, err := computeModulesHash(odoo.Spec.Modules)
 			if err == nil {
 				odoo.Status.ModulesHash = initialHash
-			} else {
-				log.Error(err, "Failed to compute initial modules hash")
 			}
 
 			if err := r.Status().Update(ctx, odoo); err != nil {
@@ -581,6 +621,7 @@ func (r *OdooReconciler) reconcileUpgrade(ctx context.Context, odoo *odoov1alpha
 				log.Error(err, "Failed to update Odoo status for upgrade start")
 				return &ctrl.Result{}, err
 			}
+			_ = ctrl.SetControllerReference(odoo, job, r.Scheme)
 			return &ctrl.Result{Requeue: true}, nil
 
 		} else if err != nil {
@@ -657,6 +698,7 @@ func (r *OdooReconciler) reconcileModulesUpdate(ctx context.Context, odoo *odoov
 				log.Error(err, "Failed to update Odoo status for modules update start")
 				return &ctrl.Result{}, err
 			}
+			_ = ctrl.SetControllerReference(odoo, job, r.Scheme)
 			return &ctrl.Result{Requeue: true}, nil
 
 		} else if err != nil {
@@ -678,7 +720,6 @@ func (r *OdooReconciler) reconcileModulesUpdate(ctx context.Context, odoo *odoov
 				}
 				return &ctrl.Result{}, fmt.Errorf("modules update job failed")
 			}
-
 			log.Info("Modules Update Job is still running", "Job.Name", modulesUpdateJobName)
 			return &ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 		}
@@ -728,6 +769,7 @@ func (r *OdooReconciler) reconcileStatefulSet(ctx context.Context, odoo *odoov1a
 			log.Error(err, "Failed to create new StatefulSet", "StatefulSet.Namespace", dep.Namespace, "StatefulSet.Name", dep.Name)
 			return &ctrl.Result{}, err
 		}
+		_ = ctrl.SetControllerReference(odoo, dep, r.Scheme)
 		return &ctrl.Result{Requeue: true}, nil
 	} else if err != nil {
 		log.Error(err, "Failed to get StatefulSet")
@@ -792,6 +834,7 @@ func (r *OdooReconciler) reconcileStatefulSet(ctx context.Context, odoo *odoov1a
 				log.Error(err, "Failed to create log PVC")
 				return &ctrl.Result{}, err
 			}
+			_ = ctrl.SetControllerReference(odoo, pvc, r.Scheme)
 			return &ctrl.Result{Requeue: true}, nil
 		}
 	} else if err != nil {
@@ -822,6 +865,7 @@ func (r *OdooReconciler) reconcileServices(ctx context.Context, odoo *odoov1alph
 				log.Error(err, "Failed to create new Service", "Service.Namespace", dep.Namespace, "Service.Name", dep.Name)
 				return &ctrl.Result{}, err
 			}
+			_ = ctrl.SetControllerReference(odoo, dep, r.Scheme)
 			return &ctrl.Result{Requeue: true}, nil
 		} else if err != nil {
 			log.Error(err, "Failed to get Service")
@@ -844,6 +888,7 @@ func (r *OdooReconciler) reconcileIngress(ctx context.Context, odoo *odoov1alpha
 				log.Error(err, "Failed to create new Ingress")
 				return &ctrl.Result{}, err
 			}
+			_ = ctrl.SetControllerReference(odoo, ing, r.Scheme)
 			return &ctrl.Result{Requeue: true}, nil
 		}
 	} else if err != nil {
@@ -1038,7 +1083,7 @@ func (r *OdooReconciler) statefulSetForOdoo(odoo *odoov1alpha1.Odoo, dbHost, sec
 		// Add to odoo container
 		dep.Spec.Template.Spec.Containers[0].VolumeMounts = append(dep.Spec.Template.Spec.Containers[0].VolumeMounts, logVolumeMount)
 	}
-	_ = ctrl.SetControllerReference(odoo, dep, r.Scheme)
+	ctrl.SetControllerReference(odoo, dep, r.Scheme)
 	return dep
 }
 
@@ -1145,7 +1190,7 @@ func (r *OdooReconciler) jobForOdooInit(odoo *odoov1alpha1.Odoo, dbHost, secretN
 		job.Spec.Template.Spec.Containers[0].VolumeMounts = append(job.Spec.Template.Spec.Containers[0].VolumeMounts, logVolumeMount)
 	}
 
-	_ = ctrl.SetControllerReference(odoo, job, r.Scheme)
+	ctrl.SetControllerReference(odoo, job, r.Scheme)
 	return job
 }
 
@@ -1253,7 +1298,7 @@ func (r *OdooReconciler) jobForOdooUpgrade(odoo *odoov1alpha1.Odoo, dbHost, secr
 		job.Spec.Template.Spec.Containers[0].VolumeMounts = append(job.Spec.Template.Spec.Containers[0].VolumeMounts, logVolumeMount)
 	}
 
-	_ = ctrl.SetControllerReference(odoo, job, r.Scheme)
+	ctrl.SetControllerReference(odoo, job, r.Scheme)
 	return job
 }
 
@@ -1355,7 +1400,7 @@ func (r *OdooReconciler) jobForModulesUpdate(odoo *odoov1alpha1.Odoo, dbHost, se
 		job.Spec.Template.Spec.Containers[0].VolumeMounts = append(job.Spec.Template.Spec.Containers[0].VolumeMounts, logVolumeMount)
 	}
 
-	_ = ctrl.SetControllerReference(odoo, job, r.Scheme)
+	ctrl.SetControllerReference(odoo, job, r.Scheme)
 	return job
 }
 
@@ -1492,7 +1537,7 @@ fi
 		},
 	}
 
-	_ = ctrl.SetControllerReference(odoo, job, r.Scheme)
+	ctrl.SetControllerReference(odoo, job, r.Scheme)
 	return job
 }
 
@@ -1506,7 +1551,7 @@ func indexOf(slice []string, item string) int {
 	return -1
 }
 
-func (r *OdooReconciler) configMapForOdoo(odoo *odoov1alpha1.Odoo, dbHost string, redisHost string, redisPort int32) *corev1.ConfigMap {
+func (r *OdooReconciler) configMapForOdoo(odoo *odoov1alpha1.Odoo, dbHost string, redisHost string, redisPort int32, redisPassword string) *corev1.ConfigMap {
 	ls := labelsForOdoo(odoo.Name)
 
 	// Start with default options
@@ -1520,8 +1565,8 @@ func (r *OdooReconciler) configMapForOdoo(odoo *odoov1alpha1.Odoo, dbHost string
 		"limit_memory_hard": "1677721600",
 		"limit_memory_soft": "6291456000",
 		"limit_request":     "8192",
-		"limit_time_cpu":    "600",
-		"limit_time_real":   "1200",
+		"limit_time_cpu":    "600",  // in seconds
+		"limit_time_real":   "1200", // in seconds
 		"log_handler":       "[':INFO']",
 		"log_level":         "info",
 		// "logfile" will be set based on VolumeEnabled
@@ -1531,11 +1576,38 @@ func (r *OdooReconciler) configMapForOdoo(odoo *odoov1alpha1.Odoo, dbHost string
 		"workers":          "0",
 	}
 
-	if redisHost != "" {
-		options["session_store_type"] = "redis"
+	if odoo.Spec.Redis.Enabled {
+		options["session_store"] = "redis"
 		options["session_redis_host"] = redisHost
 		options["session_redis_port"] = fmt.Sprintf("%d", redisPort)
-		// We assume password is handled via env var or secret if needed, or open for internal svc
+
+		if odoo.Spec.Redis.DatabaseIndex != nil {
+			options["session_redis_dbindex"] = fmt.Sprintf("%d", *odoo.Spec.Redis.DatabaseIndex)
+		} else {
+			options["session_redis_dbindex"] = "0" // Default to DB 0
+		}
+		if odoo.Spec.Redis.Prefix != "" {
+			options["session_redis_prefix"] = odoo.Spec.Redis.Prefix
+		} else {
+			options["session_redis_prefix"] = "odoo_session"
+		}
+		if redisPassword != "" {
+			options["session_redis_password"] = redisPassword
+		}
+
+		if odoo.Spec.Redis.IsCacheEnabled {
+			options["enable_redis"] = "True"
+			options["redis_host"] = redisHost
+			options["redis_port"] = fmt.Sprintf("%d", redisPort)
+			if odoo.Spec.Redis.CacheDatabaseIndex != nil {
+				options["redis_dbindex"] = fmt.Sprintf("%d", *odoo.Spec.Redis.CacheDatabaseIndex)
+			} else {
+				options["redis_dbindex"] = "1" // Default to DB 1 for cache
+			}
+			if redisPassword != "" {
+				options["redis_password"] = redisPassword
+			}
+		}
 	}
 
 	// Dynamically build addons_path
@@ -1591,7 +1663,7 @@ func (r *OdooReconciler) configMapForOdoo(odoo *odoov1alpha1.Odoo, dbHost string
 		},
 	}
 
-	_ = ctrl.SetControllerReference(odoo, cm, r.Scheme)
+	ctrl.SetControllerReference(odoo, cm, r.Scheme)
 	return cm
 }
 
@@ -1674,9 +1746,7 @@ func (r *OdooReconciler) serviceForPostgres(odoo *odoov1alpha1.Odoo) *corev1.Ser
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: ls,
-			Ports: []corev1.ServicePort{{
-				Port: 5432,
-			}},
+			Ports:    []corev1.ServicePort{{Port: 5432}},
 		},
 	}
 	_ = ctrl.SetControllerReference(odoo, svc, r.Scheme)
@@ -1725,7 +1795,7 @@ func (r *OdooReconciler) serviceForOdoo(odoo *odoov1alpha1.Odoo, name string) *c
 		}
 	}
 
-	_ = ctrl.SetControllerReference(odoo, svc, r.Scheme)
+	ctrl.SetControllerReference(odoo, svc, r.Scheme)
 	return svc
 }
 
@@ -1940,26 +2010,7 @@ func (r *OdooReconciler) statefulSetForPostgres(odoo *odoov1alpha1.Odoo, secretN
 	return sts
 }
 
-func (r *OdooReconciler) serviceForRedis(odoo *odoov1alpha1.Odoo) *corev1.Service {
-	ls := labelsForOdoo(odoo.Name + "-redis")
-	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      odoo.Name + "-redis-svc",
-			Namespace: odoo.Namespace,
-			Labels:    ls,
-		},
-		Spec: corev1.ServiceSpec{
-			Selector: ls,
-			Ports: []corev1.ServicePort{{
-				Port: 6379,
-				Name: "redis",
-			}},
-		},
-	}
-	return svc
-}
-
-func (r *OdooReconciler) statefulSetForRedis(odoo *odoov1alpha1.Odoo) *appsv1.StatefulSet {
+func (r *OdooReconciler) statefulSetForRedis(odoo *odoov1alpha1.Odoo, redisSecretName string) *appsv1.StatefulSet {
 	ls := labelsForOdoo(odoo.Name + "-redis")
 	var replicas int32 = 1
 
@@ -1992,12 +2043,64 @@ func (r *OdooReconciler) statefulSetForRedis(odoo *odoov1alpha1.Odoo) *appsv1.St
 							{ContainerPort: 6379, Name: "redis"},
 						},
 						Resources: odoo.Spec.Redis.Resources,
+						Env: []corev1.EnvVar{
+							{
+								Name:      "REDIS_PASSWORD",
+								ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: redisSecretName}, Key: "password"}}},
+						},
+						Command: []string{"redis-server", "--requirepass", "$(REDIS_PASSWORD)"},
 					}},
 				},
 			},
 		},
 	}
+	_ = ctrl.SetControllerReference(odoo, sts, r.Scheme)
 	return sts
+}
+
+func (r *OdooReconciler) serviceForRedis(odoo *odoov1alpha1.Odoo) *corev1.Service {
+	ls := labelsForOdoo(odoo.Name + "-redis")
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      odoo.Name + "-redis-svc",
+			Namespace: odoo.Namespace,
+			Labels:    ls,
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: ls,
+			Ports:    []corev1.ServicePort{{Port: 6379, Name: "redis"}},
+		},
+	}
+	_ = ctrl.SetControllerReference(odoo, svc, r.Scheme)
+	return svc
+}
+
+func (r *OdooReconciler) secretForRedis(odoo *odoov1alpha1.Odoo, name, password string) *corev1.Secret {
+	ls := labelsForOdoo(odoo.Name + "-redis")
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: odoo.Namespace,
+			Labels:    ls,
+		},
+		StringData: map[string]string{
+			"password": password,
+		},
+	}
+	_ = ctrl.SetControllerReference(odoo, secret, r.Scheme)
+	return secret
+}
+
+// generateRandomPassword generates a random string of specified length for passwords.
+func generateRandomPassword(length int) string {
+	b := make([]byte, length)
+	_, err := rand.Read(b)
+	if err != nil {
+		// Fallback or handle error, for simplicity panic here in a controller context
+		// as secret generation is critical.
+		panic(fmt.Sprintf("Failed to generate random password: %v", err))
+	}
+	return base64.URLEncoding.EncodeToString(b)[:length]
 }
 
 func labelsForOdoo(name string) map[string]string {

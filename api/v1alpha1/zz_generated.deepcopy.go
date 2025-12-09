@@ -546,6 +546,16 @@ func (in *RedisSpec) DeepCopyInto(out *RedisSpec) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.DatabaseIndex != nil {
+		in, out := &in.DatabaseIndex, &out.DatabaseIndex
+		*out = new(int32)
+		**out = **in
+	}
+	if in.CacheDatabaseIndex != nil {
+		in, out := &in.CacheDatabaseIndex, &out.CacheDatabaseIndex
+		*out = new(int32)
+		**out = **in
+	}
 	in.Resources.DeepCopyInto(&out.Resources)
 }
 

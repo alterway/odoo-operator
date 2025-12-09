@@ -47,7 +47,6 @@ spec:
           metadata:
             type: object
           spec:
-            description: OdooSpec defines the desired state of Odoo
             properties:
               database:
                 description: |-
@@ -194,27 +193,28 @@ spec:
               redis:
                 description: Redis defines the configuration for Redis session storage.
                 properties:
-                  enabled:
-                    description: Enabled enables Redis for session storage.
-                    type: boolean
-                  host:
-                    description: |-
-                      Host is the hostname of the external Redis server.
-                      Required if Managed is false.
-                    type: string
-                  managed:
-                    description: |-
-                      Managed determines if the operator should deploy a Redis instance.
-                      Defaults to true if Enabled is true and Host is empty.
-                    type: boolean
-                  port:
-                    description: Port is the port of the Redis server. Defaults to
-                      6379.
+                  cacheDatabaseIndex:
                     format: int32
                     type: integer
+                  databaseIndex:
+                    format: int32
+                    type: integer
+                  enabled:
+                    type: boolean
+                  host:
+                    type: string
+                  isCacheEnabled:
+                    type: boolean
+                  managed:
+                    type: boolean
+                  port:
+                    format: int32
+                    type: integer
+                  prefix:
+                    type: string
                   resources:
-                    description: Resources allows setting resource requests and limits
-                      for the managed Redis container.
+                    description: ResourceRequirements describes the compute resource
+                      requirements.
                     properties:
                       claims:
                         description: |-
@@ -273,8 +273,6 @@ spec:
                         type: object
                     type: object
                   secretRef:
-                    description: SecretRef contains the name of the secret with the
-                      'password' key.
                     type: string
                 type: object
               resources:

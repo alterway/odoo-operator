@@ -40,35 +40,78 @@ type DatabaseSpec struct {
 }
 
 // RedisSpec defines the configuration for Redis session storage.
+
 type RedisSpec struct {
+
 	// Enabled enables Redis for session storage.
+
 	// +optional
+
 	Enabled bool `json:"enabled,omitempty"`
 
 	// Managed determines if the operator should deploy a Redis instance.
+
 	// Defaults to true if Enabled is true and Host is empty.
+
 	// +optional
+
 	Managed *bool `json:"managed,omitempty"`
 
 	// Host is the hostname of the external Redis server.
+
 	// Required if Managed is false.
+
 	// +optional
+
 	Host string `json:"host,omitempty"`
 
 	// Port is the port of the Redis server. Defaults to 6379.
+
 	// +optional
+
 	Port int32 `json:"port,omitempty"`
 
 	// SecretRef contains the name of the secret with the 'password' key.
+
 	// +optional
+
 	SecretRef string `json:"secretRef,omitempty"`
 
-	// Resources allows setting resource requests and limits for the managed Redis container.
+	// DatabaseIndex for Redis sessions. Defaults to 0.
+
 	// +optional
+
+	DatabaseIndex *int32 `json:"databaseIndex,omitempty"`
+
+	// Prefix for Redis session keys. Defaults to "odoo_session".
+
+	// +optional
+
+	Prefix string `json:"prefix,omitempty"`
+
+	// IsCacheEnabled enables Redis for cache storage (optional).
+
+	// If enabled, a separate Redis DB index will be used.
+
+	// +optional
+
+	IsCacheEnabled bool `json:"isCacheEnabled,omitempty"`
+
+	// CacheDatabaseIndex for Redis cache. Defaults to 1.
+
+	// +optional
+
+	CacheDatabaseIndex *int32 `json:"cacheDatabaseIndex,omitempty"`
+
+	// Resources allows setting resource requests and limits for the managed Redis container.
+
+	// +optional
+
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 // OdooSpec defines the desired state of Odoo
+
 type OdooSpec struct {
 	// Size defines the number of Odoo instances
 	// +kubebuilder:validation:Minimum=1
