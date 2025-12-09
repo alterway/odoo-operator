@@ -90,6 +90,11 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return *res, err
 	}
 
+	redisHost, redisPort, res, err := r.reconcileRedis(ctx, odoo)
+	if res != nil || err != nil {
+		return *res, err
+	}
+
 	if res, err := r.reconcilePVCs(ctx, odoo); res != nil || err != nil {
 		return *res, err
 	}
@@ -98,7 +103,7 @@ func (r *OdooReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return *res, err
 	}
 
-	if res, err := r.reconcileConfigMap(ctx, odoo, dbHost); res != nil || err != nil {
+	if res, err := r.reconcileConfigMap(ctx, odoo, dbHost, redisHost, redisPort); res != nil || err != nil {
 		return *res, err
 	}
 
@@ -248,6 +253,71 @@ func (r *OdooReconciler) reconcileDatabase(ctx context.Context, odoo *odoov1alph
 	return dbHost, secretName, nil, nil
 }
 
+// reconcileRedis manages the Redis instance for session storage.
+// It returns the Redis host, port, and any reconciliation result/error.
+func (r *OdooReconciler) reconcileRedis(ctx context.Context, odoo *odoov1alpha1.Odoo) (string, int32, *ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	if !odoo.Spec.Redis.Enabled {
+		return "", 0, nil, nil
+	}
+
+	var redisHost string
+	var redisPort int32 = 6379
+
+	if odoo.Spec.Redis.Port != 0 {
+		redisPort = odoo.Spec.Redis.Port
+	}
+
+	isManaged := odoo.Spec.Redis.Managed == nil || *odoo.Spec.Redis.Managed
+
+	if !isManaged {
+		// External Redis
+		if odoo.Spec.Redis.Host == "" {
+			return "", 0, &ctrl.Result{}, fmt.Errorf("redis host must be provided when managed is false")
+		}
+		redisHost = odoo.Spec.Redis.Host
+	} else {
+		// Managed Redis
+		redisHost = fmt.Sprintf("%s-redis-svc.%s.svc.cluster.local", odoo.Name, odoo.Namespace)
+
+		// Ensure Redis Service exists
+		redisSvc := &corev1.Service{}
+		err := r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-redis-svc", Namespace: odoo.Namespace}, redisSvc)
+		if err != nil && errors.IsNotFound(err) {
+			svc := r.serviceForRedis(odoo)
+			log.Info("Creating Redis Service", "Service.Namespace", svc.Namespace, "Service.Name", svc.Name)
+			if err := r.Create(ctx, svc); err != nil {
+				log.Error(err, "Failed to create Redis Service")
+				return "", 0, &ctrl.Result{}, err
+			}
+			_ = ctrl.SetControllerReference(odoo, svc, r.Scheme)
+			return "", 0, &ctrl.Result{Requeue: true}, nil
+		} else if err != nil {
+			log.Error(err, "Failed to get Redis Service")
+			return "", 0, &ctrl.Result{}, err
+		}
+
+		// Ensure Redis StatefulSet exists
+		redisSts := &appsv1.StatefulSet{}
+		err = r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-redis", Namespace: odoo.Namespace}, redisSts)
+		if err != nil && errors.IsNotFound(err) {
+			sts := r.statefulSetForRedis(odoo)
+			log.Info("Creating Redis StatefulSet", "StatefulSet.Namespace", sts.Namespace, "StatefulSet.Name", sts.Name)
+			if err := r.Create(ctx, sts); err != nil {
+				log.Error(err, "Failed to create Redis StatefulSet")
+				return "", 0, &ctrl.Result{}, err
+			}
+			_ = ctrl.SetControllerReference(odoo, sts, r.Scheme)
+			return "", 0, &ctrl.Result{Requeue: true}, nil
+		} else if err != nil {
+			log.Error(err, "Failed to get Redis StatefulSet")
+			return "", 0, &ctrl.Result{}, err
+		}
+	}
+	return redisHost, redisPort, nil, nil
+}
+
 // reconcilePVCs manages the creation of data and addons PVCs for Odoo.
 func (r *OdooReconciler) reconcilePVCs(ctx context.Context, odoo *odoov1alpha1.Odoo) (*ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -361,12 +431,12 @@ func (r *OdooReconciler) reconcileAddonsDownload(ctx context.Context, odoo *odoo
 }
 
 // reconcileConfigMap manages the creation and update of the Odoo ConfigMap.
-func (r *OdooReconciler) reconcileConfigMap(ctx context.Context, odoo *odoov1alpha1.Odoo, dbHost string) (*ctrl.Result, error) {
+func (r *OdooReconciler) reconcileConfigMap(ctx context.Context, odoo *odoov1alpha1.Odoo, dbHost string, redisHost string, redisPort int32) (*ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	cm := &corev1.ConfigMap{}
 	err := r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-config", Namespace: odoo.Namespace}, cm)
 	if err != nil && errors.IsNotFound(err) {
-		dep := r.configMapForOdoo(odoo, dbHost)
+		dep := r.configMapForOdoo(odoo, dbHost, redisHost, redisPort)
 		log.Info("Creating a new ConfigMap", "ConfigMap.Namespace", dep.Namespace, "ConfigMap.Name", dep.Name)
 		err = r.Create(ctx, dep)
 		if err != nil {
@@ -1436,7 +1506,7 @@ func indexOf(slice []string, item string) int {
 	return -1
 }
 
-func (r *OdooReconciler) configMapForOdoo(odoo *odoov1alpha1.Odoo, dbHost string) *corev1.ConfigMap {
+func (r *OdooReconciler) configMapForOdoo(odoo *odoov1alpha1.Odoo, dbHost string, redisHost string, redisPort int32) *corev1.ConfigMap {
 	ls := labelsForOdoo(odoo.Name)
 
 	// Start with default options
@@ -1459,6 +1529,13 @@ func (r *OdooReconciler) configMapForOdoo(odoo *odoov1alpha1.Odoo, dbHost string
 		"http_port":        "8069",
 		"max_cron_threads": "2",
 		"workers":          "0",
+	}
+
+	if redisHost != "" {
+		options["session_store_type"] = "redis"
+		options["session_redis_host"] = redisHost
+		options["session_redis_port"] = fmt.Sprintf("%d", redisPort)
+		// We assume password is handled via env var or secret if needed, or open for internal svc
 	}
 
 	// Dynamically build addons_path
@@ -1860,6 +1937,66 @@ func (r *OdooReconciler) statefulSetForPostgres(odoo *odoov1alpha1.Odoo, secretN
 		},
 	}
 	_ = ctrl.SetControllerReference(odoo, sts, r.Scheme)
+	return sts
+}
+
+func (r *OdooReconciler) serviceForRedis(odoo *odoov1alpha1.Odoo) *corev1.Service {
+	ls := labelsForOdoo(odoo.Name + "-redis")
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      odoo.Name + "-redis-svc",
+			Namespace: odoo.Namespace,
+			Labels:    ls,
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: ls,
+			Ports: []corev1.ServicePort{{
+				Port: 6379,
+				Name: "redis",
+			}},
+		},
+	}
+	return svc
+}
+
+func (r *OdooReconciler) statefulSetForRedis(odoo *odoov1alpha1.Odoo) *appsv1.StatefulSet {
+	ls := labelsForOdoo(odoo.Name + "-redis")
+	var replicas int32 = 1
+
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      odoo.Name + "-redis",
+			Namespace: odoo.Namespace,
+			Labels:    ls,
+		},
+		Spec: appsv1.StatefulSetSpec{
+			ServiceName: odoo.Name + "-redis-svc",
+			Replicas:    &replicas,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: ls,
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: ls,
+				},
+				Spec: corev1.PodSpec{
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsUser:  func() *int64 { i := int64(1000); return &i }(),
+						RunAsGroup: func() *int64 { i := int64(1000); return &i }(),
+						FSGroup:    func() *int64 { i := int64(1000); return &i }(),
+					},
+					Containers: []corev1.Container{{
+						Name:  "redis",
+						Image: "redis:7-alpine",
+						Ports: []corev1.ContainerPort{
+							{ContainerPort: 6379, Name: "redis"},
+						},
+						Resources: odoo.Spec.Redis.Resources,
+					}},
+				},
+			},
+		},
+	}
 	return sts
 }
 

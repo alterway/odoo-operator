@@ -39,6 +39,35 @@ type DatabaseSpec struct {
 	PostgresVersion string `json:"postgresVersion,omitempty"`
 }
 
+// RedisSpec defines the configuration for Redis session storage.
+type RedisSpec struct {
+	// Enabled enables Redis for session storage.
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+
+	// Managed determines if the operator should deploy a Redis instance.
+	// Defaults to true if Enabled is true and Host is empty.
+	// +optional
+	Managed *bool `json:"managed,omitempty"`
+
+	// Host is the hostname of the external Redis server.
+	// Required if Managed is false.
+	// +optional
+	Host string `json:"host,omitempty"`
+
+	// Port is the port of the Redis server. Defaults to 6379.
+	// +optional
+	Port int32 `json:"port,omitempty"`
+
+	// SecretRef contains the name of the secret with the 'password' key.
+	// +optional
+	SecretRef string `json:"secretRef,omitempty"`
+
+	// Resources allows setting resource requests and limits for the managed Redis container.
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+}
+
 // OdooSpec defines the desired state of Odoo
 type OdooSpec struct {
 	// Size defines the number of Odoo instances
@@ -51,6 +80,10 @@ type OdooSpec struct {
 	// If this is not provided, a managed PostgreSQL instance will be deployed.
 	// +optional
 	Database DatabaseSpec `json:"database,omitempty"`
+
+	// Redis defines the configuration for Redis session storage.
+	// +optional
+	Redis RedisSpec `json:"redis,omitempty"`
 
 	// Ingress defines the desired state for the Ingress resource.
 	// +optional
