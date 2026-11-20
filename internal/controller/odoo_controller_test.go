@@ -111,15 +111,15 @@ var _ = Describe("Odoo Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// Reconcile for Odoo PVCs
-			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
+			// Reconcile for Odoo PVCs (data, addons, logs — one requeue per PVC created)
+			for range 3 {
+				_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: typeNamespacedName,
+				})
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			// Reconcile for ConfigMap
 			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
@@ -131,8 +131,10 @@ var _ = Describe("Odoo Controller", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Check that the PVCs were created
-			pvcNames := []string{"data", "addons"}
+			// Check that the PVCs were created, including "logs" — it must exist before the
+			// db-init Job is created, since the Job mounts it by name and would deadlock
+			// (pod stuck Pending, PVC not found) if it were only created after Job success.
+			pvcNames := []string{"data", "addons", "logs"}
 			for _, pvcName := range pvcNames {
 				pvc := &corev1.PersistentVolumeClaim{}
 				pvcKey := types.NamespacedName{Name: resourceName + "-" + pvcName + "-pvc", Namespace: "default"}

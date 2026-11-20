@@ -407,6 +407,34 @@ func (r *OdooReconciler) reconcilePVCs(ctx context.Context, odoo *odoov1alpha1.O
 			return &ctrl.Result{}, err
 		}
 	}
+
+	// The logs PVC must exist before the Init/Upgrade/ModulesUpdate Jobs and the StatefulSet,
+	// all of which mount it by name — create it here rather than lazily in reconcileStatefulSet,
+	// which only runs after those Jobs succeed (a deadlock, since their pods can't schedule without it).
+	logVolumeEnabled := odoo.Spec.Logs.VolumeEnabled == nil || *odoo.Spec.Logs.VolumeEnabled
+	logPvc := &corev1.PersistentVolumeClaim{}
+	err := r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-logs-pvc", Namespace: odoo.Namespace}, logPvc)
+	if err != nil && errors.IsNotFound(err) {
+		if logVolumeEnabled {
+			pvc := r.pvcForOdoo(odoo, "logs")
+			log.Info("Creating a new PVC for logs", "PVC.Namespace", pvc.Namespace, "PVC.Name", pvc.Name)
+			if err := r.Create(ctx, pvc); err != nil {
+				log.Error(err, "Failed to create log PVC")
+				return &ctrl.Result{}, err
+			}
+			_ = ctrl.SetControllerReference(odoo, pvc, r.Scheme)
+			return &ctrl.Result{Requeue: true}, nil
+		}
+	} else if err != nil {
+		log.Error(err, "Failed to get log PVC")
+		return &ctrl.Result{}, err
+	} else if !logVolumeEnabled {
+		log.Info("Deleting log PVC as it is disabled", "PVC.Namespace", logPvc.Namespace, "PVC.Name", logPvc.Name)
+		if err := r.Delete(ctx, logPvc); err != nil {
+			log.Error(err, "Failed to delete log PVC")
+			return &ctrl.Result{}, err
+		}
+	}
 	return nil, nil
 }
 
@@ -852,31 +880,6 @@ func (r *OdooReconciler) reconcileStatefulSet(ctx context.Context, odoo *odoov1a
 		return &ctrl.Result{Requeue: true}, nil
 	}
 
-	// Log PVC logic
-	logVolumeEnabled := odoo.Spec.Logs.VolumeEnabled == nil || *odoo.Spec.Logs.VolumeEnabled
-	logPvc := &corev1.PersistentVolumeClaim{}
-	err = r.Get(ctx, types.NamespacedName{Name: odoo.Name + "-logs-pvc", Namespace: odoo.Namespace}, logPvc)
-	if err != nil && errors.IsNotFound(err) {
-		if logVolumeEnabled {
-			pvc := r.pvcForOdoo(odoo, "logs")
-			log.Info("Creating a new PVC for logs", "PVC.Namespace", pvc.Namespace, "PVC.Name", pvc.Name)
-			if err := r.Create(ctx, pvc); err != nil {
-				log.Error(err, "Failed to create log PVC")
-				return &ctrl.Result{}, err
-			}
-			_ = ctrl.SetControllerReference(odoo, pvc, r.Scheme)
-			return &ctrl.Result{Requeue: true}, nil
-		}
-	} else if err != nil {
-		log.Error(err, "Failed to get log PVC")
-		return &ctrl.Result{}, err
-	} else if !logVolumeEnabled {
-		log.Info("Deleting log PVC as it is disabled", "PVC.Namespace", logPvc.Namespace, "PVC.Name", logPvc.Name)
-		if err := r.Delete(ctx, logPvc); err != nil {
-			log.Error(err, "Failed to delete log PVC")
-			return &ctrl.Result{}, err
-		}
-	}
 	return nil, nil
 }
 
