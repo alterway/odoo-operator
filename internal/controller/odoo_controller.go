@@ -1441,17 +1441,20 @@ func (r *OdooReconciler) jobForAddonsDownload(odoo *odoov1alpha1.Odoo, repositor
 	var scriptBuilder strings.Builder
 	_, _ = scriptBuilder.WriteString("#!/bin/sh\nset -e\n\n")
 
-	// Setup SSH for all provided secrets
-	_, _ = scriptBuilder.WriteString("mkdir -p /root/.ssh\n")
-	_, _ = scriptBuilder.WriteString("chmod 700 /root/.ssh\n")
-	_, _ = scriptBuilder.WriteString("echo \"StrictHostKeyChecking no\" >> /root/.ssh/config\n")
-	for i := range sshSecrets {
-		// Mount path for each secret is unique, /etc/ssh-key-<index>
-		_, _ = scriptBuilder.WriteString(fmt.Sprintf("cp /etc/ssh-key-%d/ssh-privatekey /root/.ssh/id_rsa_%d\n", i, i))
-		_, _ = scriptBuilder.WriteString(fmt.Sprintf("chmod 600 /root/.ssh/id_rsa_%d\n", i))
-		_, _ = scriptBuilder.WriteString(fmt.Sprintf("echo \"IdentityFile /root/.ssh/id_rsa_%d\" >> /root/.ssh/config\n", i))
+	// Setup SSH only if there are SSH secrets to configure
+	if len(sshSecrets) > 0 {
+		// Use $HOME/.ssh to work with non-root users (pod runs as user 1000)
+		_, _ = scriptBuilder.WriteString("mkdir -p $HOME/.ssh\n")
+		_, _ = scriptBuilder.WriteString("chmod 700 $HOME/.ssh\n")
+		_, _ = scriptBuilder.WriteString("echo \"StrictHostKeyChecking no\" >> $HOME/.ssh/config\n")
+		for i := range sshSecrets {
+			// Mount path for each secret is unique, /etc/ssh-key-<index>
+			_, _ = scriptBuilder.WriteString(fmt.Sprintf("cp /etc/ssh-key-%d/ssh-privatekey $HOME/.ssh/id_rsa_%d\n", i, i))
+			_, _ = scriptBuilder.WriteString(fmt.Sprintf("chmod 600 $HOME/.ssh/id_rsa_%d\n", i))
+			_, _ = scriptBuilder.WriteString(fmt.Sprintf("echo \"IdentityFile $HOME/.ssh/id_rsa_%d\" >> $HOME/.ssh/config\n", i))
+		}
+		_, _ = scriptBuilder.WriteString("\n")
 	}
-	_, _ = scriptBuilder.WriteString("\n")
 
 	// Loop through repositories and clone/update
 	for _, repo := range repositories {
@@ -1466,28 +1469,48 @@ func (r *OdooReconciler) jobForAddonsDownload(odoo *odoov1alpha1.Odoo, repositor
 
 		// Determine if it's an SSH URL for adding to known_hosts
 		isSSH := strings.HasPrefix(repo.URL, "git@")
+		sshKeyIndex := indexOf(sshSecrets, repo.SSHKeySecretRef)
 		if isSSH {
 			host := strings.Split(strings.Split(repo.URL, "@")[1], ":")[0]
-			_, _ = scriptBuilder.WriteString(fmt.Sprintf("ssh-keyscan %s >> /root/.ssh/known_hosts\n", host))
+			_, _ = scriptBuilder.WriteString(fmt.Sprintf("ssh-keyscan %s >> $HOME/.ssh/known_hosts\n", host))
 		}
 
-		_, _ = scriptBuilder.WriteString(fmt.Sprintf(`
+		// Generate clone/update script - only set sshCommand if this repo uses SSH
+		if isSSH && sshKeyIndex >= 0 {
+			_, _ = scriptBuilder.WriteString(fmt.Sprintf(`
 TARGET_DIR="/mnt/extra-addons/%s" # Each repo gets its own subdirectory
 
 if [ -d "$TARGET_DIR/.git" ]; then
     echo "Repo %s exists, updating..."
     cd "$TARGET_DIR"
-    git config core.sshCommand "ssh -i /root/.ssh/id_rsa_%d"
+    git config core.sshCommand "ssh -i $HOME/.ssh/id_rsa_%d"
     git fetch origin
     git checkout "%s"
     git pull origin "%s"
 else
     echo "Cloning repo %s..."
-    git config core.sshCommand "ssh -i /root/.ssh/id_rsa_%d"
+    GIT_SSH_COMMAND="ssh -i $HOME/.ssh/id_rsa_%d" git clone -b "%s" "%s" "$TARGET_DIR"
+fi
+
+`, repo.Name, repo.Name, sshKeyIndex, repoVersion, repoVersion, repo.Name, sshKeyIndex, repoVersion, repo.URL))
+		} else {
+			// HTTPS or public repo - no SSH configuration needed
+			_, _ = scriptBuilder.WriteString(fmt.Sprintf(`
+TARGET_DIR="/mnt/extra-addons/%s" # Each repo gets its own subdirectory
+
+if [ -d "$TARGET_DIR/.git" ]; then
+    echo "Repo %s exists, updating..."
+    cd "$TARGET_DIR"
+    git fetch origin
+    git checkout "%s"
+    git pull origin "%s"
+else
+    echo "Cloning repo %s..."
     git clone -b "%s" "%s" "$TARGET_DIR"
 fi
 
-`, repo.Name, repo.Name, indexOf(sshSecrets, repo.SSHKeySecretRef), repoVersion, repoVersion, repo.Name, indexOf(sshSecrets, repo.SSHKeySecretRef), repoVersion, repo.URL))
+`, repo.Name, repo.Name, repoVersion, repoVersion, repo.Name, repoVersion, repo.URL))
+		}
 	}
 
 	// VolumeMounts for addons PVC
